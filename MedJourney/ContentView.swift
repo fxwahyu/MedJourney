@@ -8,59 +8,46 @@
 import SwiftUI
 import SwiftData
 
+/// Root view — thin tab coordinator.
+///
+/// Each tab is its own standalone view:
+/// - **Posts**: `PostListView` — networking + MVVM demo
+/// - **Journal**: `JournalTabView` — SwiftData persistence demo
+/// - **Components**: `ComponentsTabView` — design system showcase
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+
+    @Environment(\.dependencyContainer) private var container
+    @State private var selectedTab = 0
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
-            }
-#if os(macOS)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-#endif
-            .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
-        }
-    }
+        TabView(selection: $selectedTab) {
+//            PostListView(
+//                viewModel: PostListViewModel(
+//                    repository: container.resolve(PostRepositoryProtocol.self)
+//                )
+//            )
+//            .tabItem {
+//                Label("Posts", systemImage: "list.bullet.rectangle")
+//            }
+//            .tag(0)
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
+            JournalTabView()
+                .tabItem {
+                    Label("Journal", systemImage: "heart.text.square")
+                }
+                .tag(0)
 
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
-            }
+            ComponentsTabView()
+                .tabItem {
+                    Label("Components", systemImage: "square.grid.2x2")
+                }
+                .tag(1)
         }
+        .tint(AppColors.brandDark)
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(SwiftDataContainer.create(inMemory: true))
 }

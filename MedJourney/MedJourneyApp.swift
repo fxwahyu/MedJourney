@@ -10,23 +10,37 @@ import SwiftData
 
 @main
 struct MedJourneyApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    let modelContainer: ModelContainer
+    let dependencyContainer: DependencyContainer
+
+    init() {
+        // Initialize SwiftData container
+        modelContainer = SwiftDataContainer.create()
+
+        // Initialize dependency injection
+        dependencyContainer = DependencyContainer.shared
+        dependencyContainer.registerDependencies()
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(\.dependencyContainer, dependencyContainer)
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(modelContainer)
+    }
+}
+
+// MARK: - Environment Key for DI Container
+
+private struct DependencyContainerKey: EnvironmentKey {
+    static let defaultValue: DependencyContainer = .shared
+}
+
+extension EnvironmentValues {
+    var dependencyContainer: DependencyContainer {
+        get { self[DependencyContainerKey.self] }
+        set { self[DependencyContainerKey.self] = newValue }
     }
 }
