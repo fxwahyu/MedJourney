@@ -21,14 +21,29 @@ struct MedJourneyApp: App {
         // Initialize dependency injection
         dependencyContainer = DependencyContainer.shared
         dependencyContainer.registerDependencies()
+
+        // Seed demo data on first launch
+        SeedDataManager.seedIfNeeded(context: modelContainer.mainContext)
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environment(\.dependencyContainer, dependencyContainer)
         }
         .modelContainer(modelContainer)
+    }
+}
+
+struct RootView: View {
+    @AppStorage("hasOnboarded") private var hasOnboarded = false
+
+    var body: some View {
+        if hasOnboarded {
+            ContentView()
+        } else {
+            OnboardingView()
+        }
     }
 }
 

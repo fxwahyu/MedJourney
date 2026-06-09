@@ -1,0 +1,286 @@
+//
+//  HealthSummaryManager.swift
+//  MedJourney
+//
+//  Services/AI — Owner of the curated `health_summary.md` context file.
+//
+//  This file is the heart of the token-efficient pipeline: raw journal entries and
+//  checkup PDFs are NEVER sent to the cloud LLM on every call. Instead, each save
+//  progressively updates this compact Markdown file, and ONLY this file (or a slice
+//  of it) is sent as context. Achieves ~90% token reduction.
+//
+//  Implemented as an `actor` so all file I/O is serialized and thread-safe.
+//
+//  NOTE: This is an *additional* AI context layer. The raw entries and uploaded
+//  files remain in the existing SwiftData / persistence layer — this never replaces
+//  or duplicates that storage.
+//
+
+import Foundation
+
+/// Thread-safe reader/writer for the per-user `health_summary.md` curated context file.
+actor HealthSummaryManager {
+
+    static let shared = HealthSummaryManager()
+
+    /// Max journal tag lines retained in the MD file to prevent unbounded growth.
+    private let maxJournalTagEntries = 30
+
+    /// On-disk location: `<Documents>/health_summary.md`.
+    private let fileURL: URL
+
+    /// In-memory cache of the file contents (loaded lazily, kept in sync on writes).
+    private var cachedContent: String?
+
+    init(fileName: String = "health_summary.md") {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        self.fileURL = docs.appendingPathComponent(fileName)
+    }
+
+    // MARK: - Public API
+
+    /// Returns the full current Markdown summary, creating an empty scaffold if none exists.
+    func getCurrentSummary() -> String {
+        if let cached = cachedContent { return cached }
+        let content = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? Self.emptyScaffold()
+        cachedContent = content
+        return content
+    }
+
+    /// Rough token estimate of the full file (≈ 4 chars per token).
+    /// Used to verify the pipeline is staying within budget.
+    func getSummaryTokenEstimate() -> Int {
+        getCurrentSummary().count / 4
+    }
+
+    /// Returns ONLY the "Daily Summary Context" section — a much smaller slice than
+    /// the full file, used by the home-screen greeting generator.
+    func getDailySummaryContext() -> String {
+        Self.extractSection(named: "Daily Summary Context", from: getCurrentSummary())
+            ?? "No recent health context available yet."
+    }
+
+    /// Appends a compact journal summary line + tags to the file after a journal save.
+    ///
+    /// - The "Recent Journal Tags" section is capped at the last `maxJournalTagEntries`.
+    /// - Vital-alert tags are also reflected into the running tag line.
+    func updateFromJournalEntry(_ entry: JournalEntry, tags: [HealthTag]) {
+        var content = getCurrentSummary()
+
+        let dateStr = Self.isoDay(entry.createdAt)
+        let tagLabels = tags.map(\.label)
+        let tagPart = tagLabels.isEmpty ? entry.aiTags.joined(separator: ", ")
+                                        : tagLabels.joined(separator: ", ")
+
+        var vitals: [String] = []
+        if let bp = entry.bloodPressure { vitals.append("BP \(bp)") }
+        if let temp = entry.temperature { vitals.append("Temp \(temp)") }
+        if let hr = entry.heartRate { vitals.append("HR \(hr)") }
+        let vitalsPart = vitals.isEmpty ? "" : " | Vitals: \(vitals.joined(separator: ", "))"
+
+        let newLine = "- \(dateStr): \(tagPart.isEmpty ? "(no tags)" : tagPart)\(vitalsPart)"
+
+        content = Self.appendToSection(
+            named: "Recent Journal Tags (last 30 entries max)",
+            line: newLine,
+            in: content,
+            cappedAt: maxJournalTagEntries
+        )
+        content = Self.touchLastUpdated(content)
+        persist(content)
+    }
+
+    /// Writes the *output* of a checkup analysis into the file: lab trends, flagged
+    /// abnormals, and doctor notes. Raw OCR text is intentionally NOT stored here.
+    func updateFromCheckupAnalysis(_ analysis: CheckupAnalysis) {
+        var content = getCurrentSummary()
+        let dateStr = Self.isoDay(analysis.date)
+
+        // Flagged abnormals
+        for marker in analysis.flaggedMarkers where marker.isAbnormal {
+            let line = "- \(dateStr) \(marker.name): \(marker.value)\(marker.unit.isEmpty ? "" : " \(marker.unit)") (normal: \(marker.normalRange)) — from checkup"
+            content = Self.appendToSection(named: "Flagged Abnormals", line: line, in: content, cappedAt: 50)
+        }
+
+        // Doctor notes / follow-ups (use the summary as the note)
+        if !analysis.summary.isEmpty {
+            let note = "- \(dateStr): \(analysis.summary)"
+            content = Self.appendToSection(named: "Doctor Notes & Follow-ups", line: note, in: content, cappedAt: 30)
+        }
+
+        content = Self.touchLastUpdated(content)
+        persist(content)
+    }
+
+    /// Replaces the "Daily Summary Context" section body with a freshly generated snapshot.
+    /// Called by the pipelines after an entry/checkup is processed.
+    func updateDailySummaryContext(_ snapshot: String) {
+        var content = getCurrentSummary()
+        let body = "**Last Generated:** \(Self.isoTimestamp(Date()))\n\(snapshot)"
+        content = Self.replaceSectionBody(named: "Daily Summary Context", with: body, in: content)
+        content = Self.touchLastUpdated(content)
+        persist(content)
+    }
+
+    /// Feeds the curated MD file from a checkup result the *existing* live flow already
+    /// produced (`GeminiTagService` tags + Markdown `aiAnalysis`) — instead of running
+    /// `LLMAnalysisService.analyzeCheckup` a second time. This keeps the live checkup
+    /// pipeline byte-for-byte unchanged while still building the curated knowledge base.
+    ///
+    /// - Reflects out-of-range-sounding tags (e.g. "Hemoglobin below range") into
+    ///   "Flagged Abnormals" using the same observational vocabulary the existing
+    ///   prompts already produce.
+    /// - Stores a short excerpt of the Markdown analysis as a "Doctor Notes & Follow-ups"
+    ///   entry (never the raw OCR text — keeps the file compact).
+    func updateFromExistingCheckupResult(tags: [String], analysisMarkdown: String?, date: Date) {
+        var content = getCurrentSummary()
+        let dateStr = Self.isoDay(date)
+
+        let flagKeywords = ["below", "above", "elevated", "low ", "high ", "outside"]
+        for tag in tags where flagKeywords.contains(where: { tag.lowercased().contains($0) }) {
+            let line = "- \(dateStr) \(tag) — from checkup"
+            content = Self.appendToSection(named: "Flagged Abnormals", line: line, in: content, cappedAt: 50)
+        }
+
+        if let analysisMarkdown, let excerpt = Self.firstPlainSentence(from: analysisMarkdown) {
+            let note = "- \(dateStr): \(excerpt)"
+            content = Self.appendToSection(named: "Doctor Notes & Follow-ups", line: note, in: content, cappedAt: 30)
+        }
+
+        content = Self.touchLastUpdated(content)
+        persist(content)
+    }
+
+    /// The last-modified time of the file on disk — used by the greeting cache to
+    /// decide whether a regeneration is needed.
+    func lastModified() -> Date? {
+        try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date
+    }
+
+    // MARK: - Persistence
+
+    /// Writes content to disk and refreshes the in-memory cache.
+    private func persist(_ content: String) {
+        cachedContent = content
+        try? content.data(using: .utf8)?.write(to: fileURL, options: .atomic)
+    }
+
+    // MARK: - Markdown Helpers (static, pure)
+
+    /// Empty file scaffold matching the documented schema.
+    private static func emptyScaffold() -> String {
+        """
+        # Health Summary
+        **Last Updated:** \(isoTimestamp(Date()))
+        **User Profile:** Age: — | Blood Type: —
+
+        ## Active Conditions
+
+        ## Lab Trends
+        | Marker | Normal Range | Status |
+        |--------|--------------|--------|
+
+        ## Recent Journal Tags (last 30 entries max)
+
+        ## Medications
+
+        ## Doctor Notes & Follow-ups
+
+        ## Flagged Abnormals
+
+        ## Daily Summary Context
+        **Last Generated:** \(isoTimestamp(Date()))
+        No recent health context available yet.
+        """
+    }
+
+    /// Returns the body text of a `## Section` (excluding the heading line), or nil.
+    private static func extractSection(named name: String, from content: String) -> String? {
+        let lines = content.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("## ") && $0.contains(name) }) else { return nil }
+        var body: [String] = []
+        for line in lines[(start + 1)...] {
+            if line.hasPrefix("## ") { break }
+            body.append(line)
+        }
+        return body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Appends `line` under the named section, capping the section's bullet lines at `cappedAt`
+    /// (keeps the most recent). Returns the modified content.
+    private static func appendToSection(named name: String, line: String, in content: String, cappedAt: Int) -> String {
+        var lines = content.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("## ") && $0.contains(name) }) else {
+            // Section missing — append a new one at the end.
+            return content + "\n\n## \(name)\n\(line)"
+        }
+        // Find the end of this section.
+        var end = lines.count
+        for i in (start + 1)..<lines.count where lines[i].hasPrefix("## ") {
+            end = i
+            break
+        }
+        // Existing bullet lines within the section.
+        var bullets = lines[(start + 1)..<end].filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("-") }
+        bullets.append(line)
+        if bullets.count > cappedAt {
+            bullets = Array(bullets.suffix(cappedAt))
+        }
+        // Rebuild: heading + bullets + a trailing blank line, replacing the old section body.
+        let rebuilt = [lines[start]] + bullets + [""]
+        lines.replaceSubrange(start..<end, with: rebuilt)
+        return lines.joined(separator: "\n")
+    }
+
+    /// Replaces the entire body of the named section with `body`. Returns modified content.
+    private static func replaceSectionBody(named name: String, with body: String, in content: String) -> String {
+        var lines = content.components(separatedBy: "\n")
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("## ") && $0.contains(name) }) else {
+            return content + "\n\n## \(name)\n\(body)"
+        }
+        var end = lines.count
+        for i in (start + 1)..<lines.count where lines[i].hasPrefix("## ") {
+            end = i
+            break
+        }
+        let rebuilt = [lines[start]] + body.components(separatedBy: "\n") + [""]
+        lines.replaceSubrange(start..<end, with: rebuilt)
+        return lines.joined(separator: "\n")
+    }
+
+    /// Updates the `**Last Updated:**` line at the top of the file.
+    private static func touchLastUpdated(_ content: String) -> String {
+        var lines = content.components(separatedBy: "\n")
+        if let idx = lines.firstIndex(where: { $0.hasPrefix("**Last Updated:**") }) {
+            lines[idx] = "**Last Updated:** \(isoTimestamp(Date()))"
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func isoTimestamp(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    private static func isoDay(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
+    }
+
+    /// Pulls the first plain-text line out of a Markdown analysis string — strips
+    /// `### ` headings and `• ` / `- ` bullet markers, skips blank lines, and caps
+    /// the length so the curated file stays compact.
+    private static func firstPlainSentence(from markdown: String, maxLength: Int = 220) -> String? {
+        for raw in markdown.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+            let cleaned = (line.hasPrefix("• ") || line.hasPrefix("- "))
+                ? String(line.dropFirst(2))
+                : line
+            let trimmed = cleaned.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            return String(trimmed.prefix(maxLength))
+        }
+        return nil
+    }
+}

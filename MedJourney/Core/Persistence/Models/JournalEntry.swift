@@ -56,7 +56,29 @@ final class JournalEntry {
     /// When the entry was last modified
     var updatedAt: Date
 
+    /// Comma-separated AI-generated tags (nil = not yet generated)
+    var aiTagsRaw: String?
+
+    /// Detailed AI Markdown analysis for checkups
+    var aiAnalysis: String?
+
+    /// Uploaded document images, stored efficiently outside the SQLite DB
+    @Attribute(.externalStorage)
+    var attachedImagesData: [Data]?
+
     // MARK: - Computed Properties
+
+    /// Parsed AI tags array
+    var aiTags: [String] {
+        get {
+            aiTagsRaw?.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty } ?? []
+        }
+        set {
+            aiTagsRaw = newValue.joined(separator: ",")
+        }
+    }
 
     /// Type-safe access to the entry type
     var entryType: EntryType {
@@ -114,6 +136,9 @@ final class JournalEntry {
         heartRate: Int? = nil,
         temperature: Double? = nil,
         weight: Double? = nil,
+        aiTagsRaw: String? = nil,
+        aiAnalysis: String? = nil,
+        attachedImagesData: [Data]? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -126,6 +151,9 @@ final class JournalEntry {
         self.heartRate = heartRate
         self.temperature = temperature
         self.weight = weight
+        self.aiTagsRaw = aiTagsRaw
+        self.aiAnalysis = aiAnalysis
+        self.attachedImagesData = attachedImagesData
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

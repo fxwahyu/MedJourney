@@ -19,7 +19,21 @@ struct JournalEntryView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
-    @State private var viewModel = JournalEntryViewModel()
+    @State private var viewModel: JournalEntryViewModel
+
+    /// Default init — used everywhere in the app.
+    init() { self._viewModel = State(initialValue: JournalEntryViewModel()) }
+
+    /// Preview init — lets `#Preview` inject a pre-configured ViewModel so all UI states
+    /// (live tags, prompts, etc.) are visible in the canvas without a real device.
+    init(previewViewModel: JournalEntryViewModel) {
+        self._viewModel = State(initialValue: previewViewModel)
+    }
+
+    // Local data for journal prompt context
+    @Query(sort: \JournalEntry.createdAt, order: .reverse) private var recentEntries: [JournalEntry]
+    @Query(sort: \ChecklistItem.sortOrder) private var checklistItems: [ChecklistItem]
+    @Query(filter: #Predicate<Medicine> { $0.isActive }) private var activeMedicines: [Medicine]
 
     // MARK: - Body
 
@@ -36,14 +50,20 @@ struct JournalEntryView: View {
                         case .medication: medicationSection
                     }
 
-                    AppButton("Save Entry", style: .primary, icon: "checkmark", isFullWidth: true) {
+                    AppButton(
+                        viewModel.isPreProcessing ? "Checking..." : "Save Entry",
+                        style: .primary,
+                        icon: viewModel.isPreProcessing ? nil : "checkmark",
+                        isFullWidth: true,
+                        isLoading: viewModel.isPreProcessing
+                    ) {
                         viewModel.saveEntry(context: modelContext, dismiss: dismiss)
                     }
                 }
                 .padding(AppSpacing.xxl)
             }
             .background(AppColors.background)
-            .navigationTitle("New Entry")
+            .navigationTitle(viewModel.entryType.displayName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -52,12 +72,34 @@ struct JournalEntryView: View {
                 }
             }
             .alert("About AI Analysis", isPresented: $viewModel.showAIDisclaimer) {
-                Button("I understand") { }
+                Button("I understand") { viewModel.analyzeWithAI() }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("This AI analysis is based on uploaded documents and your existing journal entries. It is not a medical diagnosis. We strongly encourage you to discuss any findings with a qualified healthcare professional.")
+                Text("MedCare AI reviews your documents and journal to surface helpful observations — not diagnoses. Always discuss results with your healthcare provider before making any health decisions.")
+            }
+            // Urgency alert — shown when Foundation Models detects red-flag language
+            .alert("Urgent Health Concern", isPresented: $viewModel.showUrgencyAlert) {
+                Button("Seek Medical Attention") { }
+                Button("Save Entry Anyway", role: .destructive) {
+                    viewModel.acknowledgeUrgencyAndSave(context: modelContext, dismiss: dismiss)
+                }
+            } message: {
+                let keywords = viewModel.urgentKeywords.isEmpty
+                    ? "concerning language"
+                    : viewModel.urgentKeywords.joined(separator: ", ")
+                Text("Your entry mentions \(keywords). If you are experiencing a medical emergency, please contact emergency services or seek immediate medical attention.")
             }
         }
+    }
+    // MARK: - onAppear
+    // Loads journal opening prompt from local data (on-device, zero Gemini tokens)
+    private func loadPromptIfNeeded() {
+        guard viewModel.entryType == .journal else { return }
+        viewModel.loadJournalPrompt(
+            entries: Array(recentEntries.prefix(20)),
+            checklistItems: checklistItems,
+            medicines: activeMedicines
+        )
     }
 
     // MARK: - Entry Type Selector
@@ -100,8 +142,6 @@ struct JournalEntryView: View {
         }
     }
 
-    // MARK: - Journal Section
-
     private var journalSection: some View {
         VStack(alignment: .leading, spacing: AppSpacing.xl) {
             // Reusable mood selector
@@ -115,12 +155,152 @@ struct JournalEntryView: View {
                 PainSliderView(painLevel: $viewModel.painLevel)
             }
 
+            // Foundation Models journal opening prompt (on-device, zero Gemini tokens)
+            journalPromptHint
+
             AppTextArea(
                 "What's on your mind?",
                 text: $viewModel.entryContent,
                 placeholder: "Describe what you're experiencing — any symptoms, how long it's been going on, what makes it better or worse...",
                 maxCharacters: 500
             )
+            .onChange(of: viewModel.entryContent) { _, _ in
+                viewModel.scheduleLiveTagGeneration()
+            }
+
+            // Live AI tag strip — appears as the user types, powered by on-device Foundation Models
+            if viewModel.isGeneratingLiveTags || !viewModel.liveTagSuggestions.isEmpty {
+                liveTagsStrip
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            quickVitalsSection
+        }
+        .onAppear { loadPromptIfNeeded() }
+    }
+
+    @ViewBuilder
+    private var journalPromptHint: some View {
+        if viewModel.isLoadingPrompt {
+            HStack(spacing: AppSpacing.sm) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppColors.brand)
+                    .symbolEffect(.variableColor.iterative.reversing)
+                Text("MedCare AI is personalizing your prompt…")
+                    .font(.system(size: 13))
+                    .foregroundStyle(AppColors.textTertiary)
+            }
+        } else if let prompt = viewModel.journalOpeningPrompt {
+            HStack(alignment: .top, spacing: AppSpacing.sm) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppColors.brand)
+                    .padding(.top, 2)
+                Text(prompt)
+                    .font(.system(size: 14))
+                    .foregroundStyle(AppColors.textSecondary)
+                    .lineSpacing(3)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, AppSpacing.md)
+            .padding(.vertical, AppSpacing.sm)
+            .background(AppColors.brandPale.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+            .overlay {
+                RoundedRectangle(cornerRadius: AppRadius.md)
+                    .stroke(AppColors.brandSoft.opacity(0.6), lineWidth: 1)
+            }
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    // MARK: - Live Tags Strip
+
+    /// Shows Foundation Models-generated tags as the user types.
+    /// The sparkles icon pulses while generation is in progress.
+    private var liveTagsStrip: some View {
+        HStack(spacing: AppSpacing.sm) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AppColors.brand)
+                .symbolEffect(
+                    .variableColor.iterative.reversing,
+                    isActive: viewModel.isGeneratingLiveTags
+                )
+
+            if viewModel.isGeneratingLiveTags && viewModel.liveTagSuggestions.isEmpty {
+                Text("MedCare AI is listening…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppColors.textTertiary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: AppSpacing.xs) {
+                        ForEach(viewModel.liveTagSuggestions, id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(AppColors.brandDark)
+                                .padding(.horizontal, AppSpacing.sm)
+                                .padding(.vertical, 3)
+                                .background(AppColors.brandPale)
+                                .clipShape(Capsule())
+                                .transition(.scale(scale: 0.85).combined(with: .opacity))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, AppSpacing.md)
+        .padding(.vertical, AppSpacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColors.brandPale.opacity(0.35))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppRadius.sm)
+                .stroke(AppColors.brandSoft.opacity(0.5), lineWidth: 1)
+        }
+    }
+
+    // MARK: - Quick Vitals Section
+
+    private var quickVitalsSection: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                spacing: AppSpacing.md
+            ) {
+                AppTextField(
+                    "Blood pressure",
+                    text: $viewModel.bloodPressure,
+                    placeholder: "120/80",
+                    suffix: "mmHg",
+                    keyboardType: .numbersAndPunctuation
+                )
+
+                AppTextField(
+                    "Heart rate",
+                    text: $viewModel.heartRate,
+                    placeholder: "72",
+                    suffix: "bpm",
+                    keyboardType: .numberPad
+                )
+
+                AppTextField(
+                    "Temperature",
+                    text: $viewModel.temperature,
+                    placeholder: "36.6",
+                    suffix: "°C",
+                    keyboardType: .decimalPad
+                )
+
+                AppTextField(
+                    "Weight",
+                    text: $viewModel.weight,
+                    placeholder: "70",
+                    suffix: "kg",
+                    keyboardType: .decimalPad
+                )
+            }
         }
     }
 
@@ -183,39 +363,15 @@ struct JournalEntryView: View {
                 }
             }
 
-            // AI Diagnose button — appears after upload
+            // AI Analysis Section
             if !viewModel.uploadedImages.isEmpty {
-                AppCard(
-                    shadowLevel: .elevated,
-                    showBorder: true,
-                    borderColor: AppColors.brand.opacity(0.3)
-                ) {
-                    HStack(spacing: AppSpacing.md) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: AppRadius.sm)
-                                .fill(AppColors.brandPale)
-                                .frame(width: 44, height: 44)
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 18))
-                                .foregroundStyle(AppColors.brandDark)
-                        }
-                        VStack(alignment: .leading, spacing: AppSpacing.xs) {
-                            Text("Show AI Diagnose")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(AppColors.textPrimary)
-                            Text("AI-powered analysis of your documents")
-                                .font(.system(size: 12))
-                                .foregroundStyle(AppColors.textTertiary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(AppColors.brandDark)
-                    }
+                if viewModel.isAnalyzingAI {
+                    aiCookingState
+                } else if let analysis = viewModel.aiAnalysis {
+                    aiAnalysisResult(analysis: analysis)
+                } else {
+                    aiDiagnoseButton
                 }
-                .onTapGesture { viewModel.showAIDisclaimer = true }
-                .transition(.opacity.combined(with: .scale(scale: 0.97)))
-                .animation(.easeInOut(duration: 0.2), value: viewModel.uploadedImages.count)
             }
 
             AppTextArea(
@@ -224,6 +380,113 @@ struct JournalEntryView: View {
                 placeholder: "Any context about your checkup, what the doctor said...",
                 maxCharacters: 500
             )
+        }
+    }
+
+    // MARK: - AI Analysis UI
+
+    private var aiDiagnoseButton: some View {
+        AppCard(
+            shadowLevel: .elevated,
+            showBorder: true,
+            borderColor: AppColors.brand.opacity(0.3)
+        ) {
+            HStack(spacing: AppSpacing.md) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: AppRadius.sm)
+                        .fill(AppColors.brandPale)
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 18))
+                        .foregroundStyle(AppColors.brandDark)
+                }
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                    Text("Show AI Diagnose")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(AppColors.textPrimary)
+                    Text("MedCare AI analysis of your documents")
+                        .font(.system(size: 12))
+                        .foregroundStyle(AppColors.textTertiary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppColors.brandDark)
+            }
+        }
+        .onTapGesture { viewModel.showAIDisclaimer = true }
+        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+    }
+
+    private var aiCookingState: some View {
+        HStack(spacing: AppSpacing.md) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 24))
+                .foregroundStyle(AppColors.brandDark)
+                .symbolEffect(.variableColor.iterative.reversing)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text("MedCare AI is reviewing…")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(AppColors.textPrimary)
+                Text("Extracting text and analyzing results")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppColors.textSecondary)
+            }
+            .shimmer()
+        }
+        .padding(AppSpacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColors.brandPale.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppRadius.md)
+                .stroke(AppColors.brandSoft, lineWidth: 1)
+        }
+        .transition(.opacity)
+    }
+
+    private func aiAnalysisResult(analysis: String) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
+            HStack(spacing: AppSpacing.xs) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(AppColors.brandDark)
+                Text("MedCare AI Insights")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(AppColors.textPrimary)
+            }
+            
+            if let tags = viewModel.aiTags {
+                tagPillsRow(tags)
+            }
+            
+            Divider()
+
+            MarkdownAnalysisView(markdown: analysis)
+        }
+        .padding(AppSpacing.lg)
+        .background(AppColors.brandPale.opacity(0.2))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppRadius.md)
+                .stroke(AppColors.brandSoft, lineWidth: 1)
+        }
+        .transition(.opacity)
+    }
+
+    private func tagPillsRow(_ tags: [String]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: AppSpacing.xs) {
+                ForEach(tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AppColors.brandDark)
+                        .padding(.horizontal, AppSpacing.sm)
+                        .padding(.vertical, 4)
+                        .background(AppColors.brandPale)
+                        .clipShape(Capsule())
+                }
+            }
         }
     }
 
@@ -285,7 +548,47 @@ struct JournalEntryView: View {
     }
 }
 
-#Preview {
+// MARK: - Previews
+
+#Preview("Default") {
     JournalEntryView()
+        .modelContainer(SwiftDataContainer.create(inMemory: true))
+}
+
+/// Shows the Foundation Models live-tag strip and the AI opening prompt,
+/// exactly as they appear on a device with Apple Intelligence enabled.
+#Preview("AI Features Active") {
+    let vm = JournalEntryViewModel()
+    vm.entryContent = "I've been having a headache all morning and feeling really tired. My neck is also stiff and I haven't been sleeping well."
+    vm.liveTagSuggestions = ["headache", "fatigue", "neck stiffness", "poor sleep"]
+    vm.isGeneratingLiveTags = false
+    vm.journalOpeningPrompt = "You mentioned headaches a few times this week — how's your head feeling compared to yesterday?"
+    vm.selectedMood = .neutral
+
+    return JournalEntryView(previewViewModel: vm)
+        .modelContainer(SwiftDataContainer.create(inMemory: true))
+}
+
+/// Shows the animated "AI listening..." state right after the user pauses typing.
+#Preview("Live Tags — Detecting") {
+    let vm = JournalEntryViewModel()
+    vm.entryContent = "Feeling dizzy when I stand up quickly, and my chest feels a little tight."
+    vm.liveTagSuggestions = []
+    vm.isGeneratingLiveTags = true
+    vm.journalOpeningPrompt = "Your blood pressure looked a bit high recently — any dizziness or unusual feelings today?"
+
+    return JournalEntryView(previewViewModel: vm)
+        .modelContainer(SwiftDataContainer.create(inMemory: true))
+}
+
+/// Shows the urgency alert state — Foundation Models detected red-flag language.
+#Preview("Urgency Alert") {
+    let vm = JournalEntryViewModel()
+    vm.entryContent = "I have chest pain and difficulty breathing since this morning."
+    vm.liveTagSuggestions = ["chest pain", "difficulty breathing"]
+    vm.showUrgencyAlert = true
+    vm.urgentKeywords = ["chest pain", "difficulty breathing"]
+
+    return JournalEntryView(previewViewModel: vm)
         .modelContainer(SwiftDataContainer.create(inMemory: true))
 }
