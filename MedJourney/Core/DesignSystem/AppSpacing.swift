@@ -2,79 +2,63 @@
 //  AppSpacing.swift
 //  MedJourney
 //
-//  Design System — Spacing and radius tokens
+//  Design System — Spacing and radius tokens (Vital Calm)
 //
 
 import SwiftUI
 
-/// Spacing tokens from the Figma design spec.
-///
-/// Use these consistently across all views to maintain
-/// a cohesive visual rhythm.
-///
-/// Usage:
-/// ```swift
-/// .padding(AppSpacing.lg)
-/// .padding(.horizontal, AppSpacing.xl)
-/// ```
+/// Spacing tokens — 4-pt grid scale (unchanged from Jade Morning).
 enum AppSpacing {
 
-    // MARK: - Spacing Scale
-
-    /// 4pt — Minimal spacing (between inline elements)
+    /// 4pt — Minimal spacing
     static let xs: CGFloat = 4
 
-    /// 8pt — Small spacing (icon gaps, tight padding)
+    /// 8pt — Small spacing
     static let sm: CGFloat = 8
 
-    /// 12pt — Medium spacing (form field gaps)
+    /// 12pt — Medium spacing
     static let md: CGFloat = 12
 
-    /// 16pt — Large spacing (standard padding, section gaps)
+    /// 16pt — Large spacing
     static let lg: CGFloat = 16
 
-    /// 20pt — Extra large spacing (between sections)
+    /// 20pt — Extra large spacing
     static let xl: CGFloat = 20
 
-    /// 24pt — Double extra large (card internal padding)
+    /// 24pt — Double extra large
     static let xxl: CGFloat = 24
 
-    /// 32pt — Triple extra large (major section separators)
+    /// 32pt — Triple extra large
     static let xxxl: CGFloat = 32
 
-    /// 40pt — Huge spacing (top-level layout margins)
+    /// 40pt — Huge spacing
     static let huge: CGFloat = 40
 
     /// 48pt — Maximum spacing
     static let max: CGFloat = 48
 }
 
-/// Corner radius tokens from the Figma design spec.
-///
-/// Usage:
-/// ```swift
-/// .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
-/// ```
+/// Corner radius tokens — Vital Calm scale.
 enum AppRadius {
 
-    /// 8pt — Subtle rounding (small buttons, chips)
-    static let xs: CGFloat = 8
+    /// 10pt — Subtle rounding (chips, small buttons)
+    static let xs: CGFloat = 10
 
-    /// 12pt — Small radius (inputs, small cards)
-    static let sm: CGFloat = 12
+    /// 14pt — Small radius (inputs, small cards)
+    static let sm: CGFloat = 14
 
-    /// 16pt — Medium radius (text fields, medium cards)
-    static let md: CGFloat = 16
+    /// 18pt — Medium radius (text fields, medium cards)
+    static let md: CGFloat = 18
 
-    /// 20pt — Large radius (text areas, large cards)
-    static let lg: CGFloat = 20
+    /// 22pt — Large radius (large cards)
+    static let lg: CGFloat = 22
 
-    /// 24pt — Extra large radius (primary cards)
-    static let xl: CGFloat = 24
+    /// 26pt — Extra large radius (primary cards, feature cards)
+    static let xl: CGFloat = 26
 
-    /// 100pt — Full pill shape (badges, tags)
-    static let pill: CGFloat = 100
+    /// 999pt — Full pill shape (badges, tags, capsules)
+    static let pill: CGFloat = 999
 
-    /// 42pt — Phone frame corner matching (bottom sheet, tab bar)
-    static let screen: CGFloat = 42
+    /// 40pt — Bottom sheet and screen-matching top corners
+    static let screen: CGFloat = 40
 }

@@ -28,6 +28,8 @@ enum SwiftDataContainer {
     /// Add new `@Model` types here as the app grows.
     static let modelTypes: [any PersistentModel.Type] = [
         JournalEntry.self,
+        Medicine.self,
+        ChecklistItem.self,
     ]
 
     /// Creates a configured `ModelContainer` with all registered models.

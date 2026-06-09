@@ -5,3 +5,7 @@ build/
 *.xcuserstate
 Pods/
 .DS_Store
+
+# AI pipeline secrets — never commit real API keys (see Services/AI/README_AI_PIPELINE.md)
+Config.plist
+MedJourney/Config.plist

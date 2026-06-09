@@ -38,6 +38,7 @@ struct AppTextField: View {
     @Binding var text: String
     let placeholder: String
     let icon: String?
+    let suffix: String?
     let errorMessage: String?
     let keyboardType: UIKeyboardType
     let isSecure: Bool
@@ -51,6 +52,7 @@ struct AppTextField: View {
         text: Binding<String>,
         placeholder: String = "",
         icon: String? = nil,
+        suffix: String? = nil,
         errorMessage: String? = nil,
         keyboardType: UIKeyboardType = .default,
         isSecure: Bool = false
@@ -59,6 +61,7 @@ struct AppTextField: View {
         self._text = text
         self.placeholder = placeholder
         self.icon = icon
+        self.suffix = suffix
         self.errorMessage = errorMessage
         self.keyboardType = keyboardType
         self.isSecure = isSecure
@@ -104,6 +107,12 @@ struct AppTextField: View {
                         .appFont(.body)
                         .keyboardType(keyboardType)
                         .focused($isFocused)
+                }
+
+                if let suffix {
+                    Text(suffix)
+                        .font(.system(size: 13))
+                        .foregroundStyle(AppColors.textTertiary)
                 }
             }
             .padding(AppSpacing.lg)

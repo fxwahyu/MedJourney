@@ -2,94 +2,90 @@
 //  AppTypography.swift
 //  MedJourney
 //
-//  Design System — Typography scale and font definitions
+//  Design System — Typography scale (Vital Calm)
+//
+//  Typefaces:
+//  - Display/headings: Fraunces (warm editorial serif) — add Fraunces-*.ttf to target
+//  - UI/body:          Plus Jakarta Sans — add PlusJakartaSans-*.ttf to target
+//  - Numerals:         DM Mono — add DMMono-*.ttf to target; used for all clinical values
+//
+//  Until font files are bundled, each Font.custom call silently falls back to the system font.
+//  Register fonts in Info.plist under UIAppFonts once added.
 //
 
 import SwiftUI
 
-/// Defines the typographic scale for the app.
-///
-/// The Figma spec uses:
-/// - **Fraunces** (serif) for display/headings — warm, elegant
-/// - **Plus Jakarta Sans** for body/UI — clean, modern
-///
-/// This implementation uses system font with `.serif` and `.rounded` designs
-/// as stand-ins. To use custom fonts later, update the `font` computed property
-/// in each case — all call sites remain unchanged.
-///
-/// Usage:
-/// ```swift
-/// Text("Hello")
-///     .appFont(.h1)
-///
-/// Text("Subtitle")
-///     .appFont(.body)
-/// ```
+/// Typographic scale for the app.
 enum AppFont {
 
-    // MARK: - Heading Styles (Serif — Fraunces stand-in)
+    // MARK: - Heading Styles (Fraunces — editorial serif)
 
-    /// H1: Large display heading — 28pt serif
+    /// H1: Large display heading — 33pt serif, sentence case
     case h1
 
     /// H2: Section heading — 22pt serif
     case h2
 
-    /// H3: Card/subsection heading — 18pt serif
+    /// H3: Card/subsection heading — 17pt serif
     case h3
 
-    // MARK: - UI Styles (Sans-serif — Plus Jakarta Sans stand-in)
+    // MARK: - UI Styles (Plus Jakarta Sans)
 
-    /// Label caps: 11pt, semibold, uppercase with letter spacing
+    /// Label caps: 11pt, bold, uppercase with tracking
     case labelCaps
 
-    /// Body: Primary readable text — 14pt regular
+    /// Body: Primary readable text — 15pt medium
     case body
 
-    /// Body semibold: Emphasized body text — 14pt semibold
+    /// Body semibold: Emphasized body text — 15pt bold
     case bodySemibold
 
-    /// Caption: Secondary small text — 12pt regular
+    /// Caption: Secondary small text — 13pt medium
     case caption
 
-    /// Small: Very small text — 11pt regular
+    /// Small: Very small text — 11.5pt medium
     case small
 
-    /// Button text — 15pt semibold
+    /// Button text — 15pt bold
     case button
 
-    /// Large body — 16pt regular
+    /// Large body — 16pt medium
     case bodyLarge
+
+    // MARK: - Mono (DM Mono — clinical numerals)
+
+    /// Mono: All numeric vitals, times, doses, percentages
+    case mono
 
     // MARK: - Font Properties
 
-    /// The `Font` value for this typography style.
     var font: Font {
         switch self {
         case .h1:
-            return .system(size: 28, weight: .regular, design: .serif)
+            return .custom("Fraunces-Medium", size: 33)
         case .h2:
-            return .system(size: 22, weight: .regular, design: .serif)
+            return .custom("Fraunces-Medium", size: 22)
         case .h3:
-            return .system(size: 18, weight: .medium, design: .serif)
+            return .custom("Fraunces-Medium", size: 17)
         case .labelCaps:
-            return .system(size: 11, weight: .semibold, design: .default)
+            return .custom("PlusJakartaSans-Bold", size: 11)
         case .body:
-            return .system(size: 14, weight: .regular, design: .default)
+            return .custom("PlusJakartaSans-Medium", size: 15)
         case .bodySemibold:
-            return .system(size: 14, weight: .semibold, design: .default)
+            return .custom("PlusJakartaSans-Bold", size: 15)
         case .caption:
-            return .system(size: 12, weight: .regular, design: .default)
+            return .custom("PlusJakartaSans-Medium", size: 13)
         case .small:
-            return .system(size: 11, weight: .regular, design: .default)
+            return .custom("PlusJakartaSans-Medium", size: 11.5)
         case .button:
-            return .system(size: 15, weight: .semibold, design: .default)
+            return .custom("PlusJakartaSans-Bold", size: 15)
         case .bodyLarge:
-            return .system(size: 16, weight: .regular, design: .default)
+            return .custom("PlusJakartaSans-Medium", size: 16)
+        case .mono:
+            return .custom("DMMono-Medium", size: 15)
         }
     }
 
-    /// The line spacing multiplier for this style.
     var lineSpacing: CGFloat {
         switch self {
         case .h1: return 4
@@ -99,10 +95,11 @@ enum AppFont {
         case .caption, .small: return 3
         case .labelCaps: return 1
         case .button: return 0
+        case .mono: return 0
         }
     }
 
-    /// Whether this style should be uppercased.
+    /// h1 is sentence-case in Vital Calm; only labelCaps is uppercased.
     var isUppercased: Bool {
         switch self {
         case .labelCaps: return true
@@ -110,10 +107,9 @@ enum AppFont {
         }
     }
 
-    /// The letter spacing (tracking) for this style.
     var tracking: CGFloat {
         switch self {
-        case .labelCaps: return 0.9
+        case .labelCaps: return 1.4
         default: return 0
         }
     }
@@ -121,7 +117,6 @@ enum AppFont {
 
 // MARK: - View Modifier
 
-/// Applies a typography style from `AppFont` to a view.
 struct AppFontModifier: ViewModifier {
     let style: AppFont
 
@@ -136,11 +131,6 @@ struct AppFontModifier: ViewModifier {
 // MARK: - View Extension
 
 extension View {
-
-    /// Applies an `AppFont` typography style to the view.
-    ///
-    /// - Parameter style: The typography style to apply.
-    /// - Returns: The view with the font, line spacing, and tracking applied.
     func appFont(_ style: AppFont) -> some View {
         modifier(AppFontModifier(style: style))
     }
@@ -149,11 +139,6 @@ extension View {
 // MARK: - Text Extension
 
 extension Text {
-
-    /// Applies an `AppFont` style to a `Text` view, including uppercase transform.
-    ///
-    /// Use this instead of `appFont()` when you need the uppercase transform
-    /// for `.labelCaps` style.
     func styled(_ style: AppFont) -> some View {
         let baseText = style.isUppercased ? self.textCase(.uppercase) : self.textCase(nil)
         return baseText
@@ -162,4 +147,3 @@ extension Text {
             .tracking(style.tracking)
     }
 }
-
