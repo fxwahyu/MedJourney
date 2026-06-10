@@ -13,8 +13,8 @@ final class CheckupViewModel {
     private let checklistService: ChecklistGenerationService
 
     init(
-        tagService: AITagServiceProtocol = GeminiTagService(apiKey: AIConfig.llmAPIKey),
-        checklistService: ChecklistGenerationService = ChecklistGenerationService(apiKey: AIConfig.llmAPIKey)
+        tagService: AITagServiceProtocol = LLMTagService(),
+        checklistService: ChecklistGenerationService = ChecklistGenerationService()
     ) {
         self.tagService = tagService
         self.checklistService = checklistService
@@ -65,7 +65,7 @@ final class CheckupViewModel {
             }
             uploadedImages.append(contentsOf: images)
         } else {
-            if let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+            if let data = try? Data(contentsOf: url), let image = ImageDownsampler.downsampled(from: data) {
                 uploadedImages.append(image)
             }
         }
@@ -191,7 +191,7 @@ final class CheckupViewModel {
             var images: [UIImage] = []
             for item in items {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                   let image = UIImage(data: data) {
+                   let image = ImageDownsampler.downsampled(from: data) {
                     images.append(image)
                 }
             }

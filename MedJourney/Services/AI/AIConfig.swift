@@ -32,11 +32,14 @@ enum AIConfig {
         if let plistVal = configPlist?[key] as? String,
            !plistVal.isEmpty,
            !plistVal.hasPrefix("YOUR_") {
+            print("🔑 [AIConfig] \(key) → Config.plist (\(plistVal.prefix(8))…)")
             return plistVal
         }
         if let envVal = ProcessInfo.processInfo.environment[key], !envVal.isEmpty {
+            print("🔑 [AIConfig] \(key) → env var (\(envVal.prefix(8))…)")
             return envVal
         }
+        print("🔑 [AIConfig] \(key) → ❌ NOT FOUND (Config.plist=\(configPlist == nil ? "nil" : "loaded"), env=missing)")
         return nil
     }
 
@@ -45,7 +48,11 @@ enum AIConfig {
         guard let url = Bundle.main.url(forResource: "Config", withExtension: "plist"),
               let data = try? Data(contentsOf: url),
               let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        else { return nil }
+        else {
+            print("🔑 [AIConfig] Config.plist not found in Bundle.main (bundleURL=\(Bundle.main.bundleURL.lastPathComponent))")
+            return nil
+        }
+        print("🔑 [AIConfig] Config.plist loaded from bundle (\(dict.keys.sorted().joined(separator: ", ")))")
         return dict
     }()
 }

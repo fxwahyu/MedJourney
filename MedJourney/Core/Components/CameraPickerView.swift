@@ -28,7 +28,9 @@ struct CameraPickerView: UIViewControllerRepresentable {
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
             if let image = info[.editedImage] as? UIImage ?? info[.originalImage] as? UIImage {
-                parent.images.append(image)
+                // Cap to a sane working size so a full-res camera capture (often 12 MP)
+                // doesn't sit decoded in memory; OCR/display quality is unaffected.
+                parent.images.append(ImageDownsampler.downsampled(image))
             }
             parent.dismiss()
         }

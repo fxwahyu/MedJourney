@@ -43,18 +43,25 @@ struct InsightsTabView: View {
             .ignoresSafeArea(edges: .top)
             .background(AppColors.background)
             .navigationBarHidden(true)
-            .onAppear { reloadViewModel() }
-            .onChange(of: entries.count)         { _, _ in reloadViewModel() }
-            .onChange(of: checklistItems.count)  { _, _ in reloadViewModel() }
-            .onChange(of: activeMedicines.count) { _, _ in reloadViewModel() }
+            .onAppear { initialLoad() }
+            // onChange only refreshes charts/stats — does NOT re-fire the AI phrase call.
+            .onChange(of: entries.count)         { _, _ in refreshData() }
+            .onChange(of: checklistItems.count)  { _, _ in refreshData() }
+            .onChange(of: activeMedicines.count) { _, _ in refreshData() }
             .sheet(isPresented: $showExport) {
                 ExportPreviewView(entries: entries, medicines: Array(activeMedicines))
             }
         }
     }
 
-    private func reloadViewModel() {
+    /// Full load on first appear — includes requesting the AI phrase insight.
+    private func initialLoad() {
         viewModel.loadData(from: entries, checklistItems: checklistItems, medicines: activeMedicines)
+    }
+
+    /// Lightweight refresh when data changes mid-session — charts only, no AI call.
+    private func refreshData() {
+        viewModel.refreshData(from: entries, checklistItems: checklistItems, medicines: activeMedicines)
     }
 
     // MARK: - Header

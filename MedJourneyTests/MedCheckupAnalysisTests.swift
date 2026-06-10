@@ -100,51 +100,15 @@ private final class TestBundleToken: NSObject {}
 @Suite("Medical Checkup Analysis — Gemini vs GPT-4o Comparison")
 struct MedCheckupAnalysisTests {
 
-    // MARK: - Keys
-    //
-    // Resolution order:
-    //   1. App bundle Config.plist — the .app sits next to this .xctest in DerivedData
-    //   2. GEMINI_API_KEY / OPENAI_API_KEY Xcode scheme environment variable
+    // Note: these tests no longer resolve an API key directly. `LLMTagService`
+    // routes every call through `LLMGateway`, which owns provider + key resolution
+    // (Groq → Gemini). Keys come from the app bundle's Config.plist at runtime.
 
-    private var geminiKey: String {
-        // 1. App bundle's Config.plist (git-ignored; holds the real key locally)
-        let testBundle = Bundle(for: TestBundleToken.self)
-        let appBundleURL = testBundle.bundleURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("MedJourney.app")
-        if let appBundle = Bundle(url: appBundleURL),
-           let configURL = appBundle.url(forResource: "Config", withExtension: "plist"),
-           let cfg = NSDictionary(contentsOf: configURL) as? [String: Any],
-           let key = cfg["GEMINI_API_KEY"] as? String,
-           !key.isEmpty, !key.hasPrefix("YOUR_") {
-            return key
-        }
-        // 2. Xcode scheme env var
-        return ProcessInfo.processInfo.environment["GEMINI_API_KEY"] ?? ""
-    }
-
-    private var openAIKey: String {
-        // 1. App bundle's Config.plist
-        let testBundle = Bundle(for: TestBundleToken.self)
-        let appBundleURL = testBundle.bundleURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("MedJourney.app")
-        if let appBundle = Bundle(url: appBundleURL),
-           let configURL = appBundle.url(forResource: "Config", withExtension: "plist"),
-           let cfg = NSDictionary(contentsOf: configURL) as? [String: Any],
-           let key = cfg["OPENAI_API_KEY"] as? String,
-           !key.isEmpty, !key.hasPrefix("YOUR_") {
-            return key
-        }
-        // 2. Xcode scheme env var
-        return ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
-    }
-
-    // MARK: - Gemini — hardcoded OCR text
+    // MARK: - Checkup analysis (hardcoded OCR text)
 
     @Test("Gemini: analyze Mayapada Hospital lab results (hardcoded OCR)", .timeLimit(.minutes(2)))
     func testGeminiAnalysisHardcodedOCR() async throws {
-        let service = GeminiTagService(apiKey: geminiKey)
+        let service = LLMTagService()
         let entry = makeCheckupEntry()
 
         let result = try await service.generateTags(for: entry, ocrText: mayapadaLabOCRText)
@@ -152,40 +116,6 @@ struct MedCheckupAnalysisTests {
 
         #expect(!result.tags.isEmpty, "Gemini should return at least one observational tag")
         #expect(result.analysis != nil, "Gemini should return a structured analysis for checkup entries")
-    }
-
-    // MARK: - GPT-4o — hardcoded OCR text
-
-    @Test("GPT-4o: analyze Mayapada Hospital lab results (hardcoded OCR)", .timeLimit(.minutes(2)))
-    func testGPT4oAnalysisHardcodedOCR() async throws {
-        let service = OpenAITagService(apiKey: openAIKey)
-        let entry = makeCheckupEntry()
-
-        let result = try await service.generateTags(for: entry, ocrText: mayapadaLabOCRText)
-        printResult(label: "GPT-4o (gpt-4o)", result: result)
-
-        #expect(!result.tags.isEmpty, "GPT-4o should return at least one observational tag")
-        #expect(result.analysis != nil, "GPT-4o should return a structured analysis for checkup entries")
-    }
-
-    // MARK: - Side-by-side comparison (runs both in parallel)
-
-    @Test("Compare: Gemini vs GPT-4o side-by-side", .timeLimit(.minutes(3)))
-    func testSideBySideComparison() async throws {
-        let geminiService = GeminiTagService(apiKey: geminiKey)
-        let openAIService = OpenAITagService(apiKey: openAIKey)
-        let entry = makeCheckupEntry()
-
-        async let geminiTask = geminiService.generateTags(for: entry, ocrText: mayapadaLabOCRText)
-        async let gptTask    = openAIService.generateTags(for: entry, ocrText: mayapadaLabOCRText)
-
-        let (gemini, gpt) = try await (geminiTask, gptTask)
-        printSideBySide(gemini: gemini, gpt: gpt)
-
-        #expect(!gemini.tags.isEmpty, "Gemini should return tags")
-        #expect(!gpt.tags.isEmpty,    "GPT-4o should return tags")
-        #expect(gemini.analysis != nil, "Gemini should return analysis")
-        #expect(gpt.analysis    != nil, "GPT-4o should return analysis")
     }
 
     // MARK: - OCR pipeline: Vision → Gemini (requires test images in bundle)
@@ -206,71 +136,13 @@ struct MedCheckupAnalysisTests {
         printOCRText(ocrText)
         #expect(!ocrText.isEmpty, "Apple Vision should extract text from the lab result images")
 
-        let service = GeminiTagService(apiKey: geminiKey)
+        let service = LLMTagService()
         let entry   = makeCheckupEntry()
         let result  = try await service.generateTags(for: entry, ocrText: ocrText)
 
         printResult(label: "GEMINI (after Vision OCR)", result: result)
         #expect(!result.tags.isEmpty)
         #expect(result.analysis != nil)
-    }
-
-    // MARK: - OCR pipeline: Vision → GPT-4o (requires test images in bundle)
-
-    @Test("OCR pipeline: Apple Vision → GPT-4o analysis", .timeLimit(.minutes(3)))
-    func testOCRPipelineGPT4o() async throws {
-        guard let images = loadTestImages() else {
-            print("""
-            ⚠️  [OCR Pipeline - GPT-4o] Skipping: no test images found.
-                Add 'lab_result_1.png' and 'lab_result_2.png' to the MedJourneyTests
-                target (Build Phases → Copy Bundle Resources) and re-run.
-            """)
-            return
-        }
-
-        let ocrText = try await runVisionOCR(on: images)
-
-        printOCRText(ocrText)
-        #expect(!ocrText.isEmpty, "Apple Vision should extract text from the lab result images")
-
-        let service = OpenAITagService(apiKey: openAIKey)
-        let entry   = makeCheckupEntry()
-        let result  = try await service.generateTags(for: entry, ocrText: ocrText)
-
-        printResult(label: "GPT-4o (after Vision OCR)", result: result)
-        #expect(!result.tags.isEmpty)
-        #expect(result.analysis != nil)
-    }
-
-    // MARK: - Full pipeline comparison: Vision OCR → both models (requires test images)
-
-    @Test("Full pipeline: Vision OCR → Gemini vs GPT-4o comparison", .timeLimit(.minutes(4)))
-    func testFullOCRPipelineComparison() async throws {
-        guard let images = loadTestImages() else {
-            print("""
-            ⚠️  [Full OCR Pipeline] Skipping: no test images found.
-                Add 'lab_result_1.png' and 'lab_result_2.png' to the MedJourneyTests
-                target (Build Phases → Copy Bundle Resources) and re-run.
-            """)
-            return
-        }
-
-        let ocrText = try await runVisionOCR(on: images)
-        printOCRText(ocrText)
-        #expect(!ocrText.isEmpty)
-
-        let geminiService = GeminiTagService(apiKey: geminiKey)
-        let openAIService = OpenAITagService(apiKey: openAIKey)
-        let entry         = makeCheckupEntry()
-
-        async let geminiTask = geminiService.generateTags(for: entry, ocrText: ocrText)
-        async let gptTask    = openAIService.generateTags(for: entry, ocrText: ocrText)
-
-        let (gemini, gpt) = try await (geminiTask, gptTask)
-        printSideBySide(gemini: gemini, gpt: gpt)
-
-        #expect(!gemini.tags.isEmpty)
-        #expect(!gpt.tags.isEmpty)
     }
 
     // MARK: - Helpers
@@ -333,30 +205,6 @@ struct MedCheckupAnalysisTests {
 
         print("""
         🔬 ═══════════════════════════════════════════════════════════════════
-
-        """)
-    }
-
-    private func printSideBySide(gemini: AITagResult, gpt: AITagResult) {
-        print("""
-
-        ┌─────────────────────────────────────────────────────────────────────┐
-        │           MEDICAL ANALYSIS COMPARISON — GEMINI vs GPT-4o           │
-        └─────────────────────────────────────────────────────────────────────┘
-
-        🔵 GEMINI TAGS (\(gemini.tags.count)):
-        \(gemini.tags.map { "   • \($0)" }.joined(separator: "\n"))
-
-        🟢 GPT-4o TAGS (\(gpt.tags.count)):
-        \(gpt.tags.map { "   • \($0)" }.joined(separator: "\n"))
-
-        ──────────────────────────── GEMINI ANALYSIS ────────────────────────
-        \(gemini.analysis ?? "(no analysis)")
-
-        ──────────────────────────── GPT-4o ANALYSIS ────────────────────────
-        \(gpt.analysis ?? "(no analysis)")
-
-        └─────────────────────────────────────────────────────────────────────┘
 
         """)
     }

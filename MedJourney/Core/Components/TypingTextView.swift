@@ -29,6 +29,13 @@ struct TypingTextView: View {
     var loop: Bool = true
     /// Pass `nil` for unlimited lines (e.g. the AI briefing card).
     var lineLimit: Int? = 1
+    /// When false, the first prompt is shown in full immediately with no typing
+    /// animation (e.g. a daily briefing the user has already seen). Only meaningful
+    /// for one-shot, non-looping content.
+    var animated: Bool = true
+    /// Called once the (one-shot) text has finished typing, or immediately when
+    /// `animated` is false. Lets the caller record that the animation has played.
+    var onFinished: (() -> Void)? = nil
 
     // MARK: - State
 
@@ -52,7 +59,9 @@ struct TypingTextView: View {
                 cursorVisible = false
             }
         }
-        .task {
+        // Key the task to the prompt content so it cleanly restarts (rather than
+        // appending) whenever the text changes or the view re-appears.
+        .task(id: prompts) {
             await runTypingLoop()
         }
     }
@@ -61,6 +70,17 @@ struct TypingTextView: View {
 
     private func runTypingLoop() async {
         guard !prompts.isEmpty else { return }
+
+        // Instant mode: show the full text at once, no per-character typing.
+        if !animated {
+            displayedText = prompts.first ?? ""
+            onFinished?()
+            return
+        }
+
+        // Always start from a clean slate — prevents a re-run of this task from
+        // appending a second copy of the text to whatever is already displayed.
+        displayedText = ""
         var index = 0
 
         while !Task.isCancelled {
@@ -74,7 +94,10 @@ struct TypingTextView: View {
             }
 
             // One-shot mode: stop after the first prompt is fully typed
-            if !loop { return }
+            if !loop {
+                onFinished?()
+                return
+            }
 
             // Hold the full prompt
             try? await Task.sleep(for: .seconds(pauseAfterTyping))

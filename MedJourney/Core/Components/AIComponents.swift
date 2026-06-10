@@ -272,7 +272,7 @@ struct FeatureCard<Content: View>: View {
 
 // MARK: - Markdown Analysis Renderer
 
-/// Renders the structured markdown produced by GeminiTagService into a proper visual hierarchy.
+/// Renders the structured markdown produced by LLMTagService into a proper visual hierarchy.
 ///
 /// Supported syntax:
 /// - `### Heading` / `## Heading` / `# Heading` → styled section title

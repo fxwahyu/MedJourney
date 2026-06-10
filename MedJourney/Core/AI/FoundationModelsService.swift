@@ -340,11 +340,20 @@ final class FoundationModelsService {
         recentTags: [String],
         anomalyMessages: [String],
         yesterdayCompletion: Double?,
-        daysSinceLastEntry: Int?
+        daysSinceLastEntry: Int?,
+        healthContext: String? = nil
     ) async -> String? {
         guard isAvailable else { return nil }
 
         var lines: [String] = []
+
+        // Curated MD context first — this is the user's documented history (conditions,
+        // lab trends, recent flags). Including it makes the greeting specific, not generic.
+        if let healthContext,
+           !healthContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !healthContext.contains("No recent health context") {
+            lines.append("Documented health context:\n\(healthContext)")
+        }
 
         if let days = daysSinceLastEntry {
             lines.append(days == 0
@@ -365,19 +374,21 @@ final class FoundationModelsService {
 
         let session = LanguageModelSession()
         let prompt = """
-        You are MedCare AI, a warm health companion. Write ONE short sentence (max 20 words) welcoming the user and referencing something from their health patterns.
+        You are MedCare AI, a warm health companion. Write a short daily briefing of EXACTLY TWO sentences (about 30–40 words total) that checks in on the user.
+
+        Structure:
+        - Sentence 1: warmly name the user's SPECIFIC recent situation — cite a concrete detail from the context (a recent symptom like the dizziness, a lab trend like improving blood sugar, or how their week went).
+        - Sentence 2: a brief, useful takeaway — gentle encouragement, one small thing to keep an eye on, or a nudge worth acting on today. Make it feel personal and actionable, not generic.
 
         Rules:
-        - Warm, personal, caring — like a supportive friend checking in
-        - Reference a concrete habit or pattern (streak, checklist progress, days since last entry)
-        - Do NOT name, suggest, or imply any medical condition or diagnosis
-        - Never clinical, never alarming, never generic
-        - Max 20 words, one sentence only
+        - Be specific to THIS user. A generic "hope you're well" is a failure.
+        - You MAY mention the user's already-documented conditions/trends (their known history, not a new diagnosis).
+        - Do NOT invent any NEW medical condition. Warm and supportive, never alarming or clinical.
 
         User's health context:
         \(lines.joined(separator: "\n"))
 
-        Write only the sentence, nothing else.
+        Write only the two sentences, nothing else.
         """
 
         print("🧠 [FoundationModels] generateWelcomeInsight called")

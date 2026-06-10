@@ -119,7 +119,10 @@ final class InsightsViewModel {
 
     // Period filter — changing it triggers a reload of period-sensitive data
     var selectedPeriod: InsightPeriod = .month {
-        didSet { reloadPeriodData() }
+        didSet {
+            onDeviceInsight = nil   // stale for old period — will be re-requested below
+            reloadPeriodData()
+        }
     }
 
     // Vitals trend chart
@@ -155,7 +158,6 @@ final class InsightsViewModel {
     private var cachedEntries: [JournalEntry] = []
     private var cachedMedicines: [Medicine] = []
     private var cachedChecklistItems: [ChecklistItem] = []
-    private let checklistService = ChecklistGenerationService(apiKey: AIConfig.llmAPIKey)
 
     private static let summaryTextKey = "insights.healthSummary"
     private static let summaryDateKey = "insights.healthSummaryDate"
@@ -181,22 +183,46 @@ final class InsightsViewModel {
 
     // MARK: - Load
 
-    /// Primary entry point — call from the view whenever data changes.
+    /// Primary entry point — call from the view on first appear.
+    /// Loads all data including requesting the AI phrase insight (once per period).
     func loadData(
         from entries: [JournalEntry],
         checklistItems: [ChecklistItem] = [],
         medicines: [Medicine] = []
     ) {
-        cachedEntries       = entries
-        cachedMedicines     = medicines
+        cachedEntries        = entries
+        cachedMedicines      = medicines
         cachedChecklistItems = checklistItems
 
         loadMoodTrend(from: entries)
-        reloadPeriodData()
-        journalStreak         = computeStreak(from: entries)
-        checklistCompletionRate = computeCompletionRate()
+        reloadPeriodData()      // includes triggerOnDeviceInsight()
+        journalStreak            = computeStreak(from: entries)
+        checklistCompletionRate  = computeCompletionRate()
         loadMedicationCorrelations()
         anomalies = VitalsAnomalyDetector.detect(from: Array(entries.prefix(100)))
+    }
+
+    /// Lightweight refresh for when SwiftData entries change mid-session
+    /// (new journal entry saved, checklist toggled, etc.).
+    /// Reloads charts and stats only — does NOT re-trigger the AI phrase,
+    /// which is already good for the current period and session.
+    func refreshData(
+        from entries: [JournalEntry],
+        checklistItems: [ChecklistItem] = [],
+        medicines: [Medicine] = []
+    ) {
+        cachedEntries        = entries
+        cachedMedicines      = medicines
+        cachedChecklistItems = checklistItems
+
+        loadMoodTrend(from: entries)
+        loadTagFrequency(from: entries)
+        loadVitalsData(from: entries)
+        journalStreak            = computeStreak(from: entries)
+        checklistCompletionRate  = computeCompletionRate()
+        loadMedicationCorrelations()
+        anomalies = VitalsAnomalyDetector.detect(from: Array(entries.prefix(100)))
+        // Note: intentionally skips triggerOnDeviceInsight() — no extra AI call needed.
     }
 
     /// Reloads everything that depends on `selectedPeriod`.
@@ -225,14 +251,47 @@ final class InsightsViewModel {
 
     // MARK: - Tag Frequency (period-filtered)
 
+    /// Meta/status words that are NOT symptoms — excluded from the Symptom Frequency
+    /// chart so only real, patient-facing symptoms are shown.
+    private static let nonSymptomTags: Set<String> = [
+        "monitoring", "routine monitoring", "routine", "concern", "exercise",
+        "improving", "improved mood", "improved energy", "positive", "positive outlook",
+        "diabetes management", "diabetes monitoring", "weight management", "weight tracking",
+        "weight stable", "weight loss", "hydration", "diet success", "dietary adherence",
+        "dietary awareness", "diet adjustment", "good sleep", "lifestyle change",
+        "medication initiation", "medication tolerating", "medication adherence",
+        "treatment responding", "progress", "hopeful", "adaptation", "lesson learned",
+        "doctor appointment", "health concern", "reminder needed", "combination therapy",
+        "non diabetes related", "blood pressure normal", "blood pressure stable",
+        "infection ruled out", "dizziness workup", "immune response", "metformin adjustment",
+        "medication side effect", "medication effect", "medication complexity",
+        "adherence reminder", "diabetes symptom", "glucose fluctuation", "eye concern",
+        "glucose risk", "infection monitoring", "cold recovering", "metformin started",
+        "amlodipine started", "glipizide started", "metformin reaction", "glipizide side effect",
+        "glipizide risk", "possible hypoglycemia", "hypoglycemia risk", "medication adjustment",
+        "diabetes type2 diagnosed", "hypertension stage1", "treatment responding", "busy schedule",
+        "diet disruption", "afternoon crash", "sedentary behavior", "mental health"
+    ]
+
+    /// Converts a stored tag into a human-readable label: hyphens → spaces, trimmed,
+    /// lowercased (e.g. "work-stress" → "work stress").
+    private static func humanize(_ tag: String) -> String {
+        tag.replacingOccurrences(of: "-", with: " ")
+           .replacingOccurrences(of: "_", with: " ")
+           .trimmingCharacters(in: .whitespaces)
+           .lowercased()
+    }
+
     private func loadTagFrequency(from entries: [JournalEntry]) {
         let cutoff = Calendar.current.date(byAdding: .day, value: -selectedPeriod.rawValue, to: Date()) ?? Date()
         var freq: [String: Int] = [:]
-        for entry in entries where entry.createdAt >= cutoff {
+        // Only journal entries carry day-to-day symptoms. Checkup / medication entries
+        // hold lab findings and admin tags that are not symptoms, so they're excluded.
+        for entry in entries where entry.entryType == .journal && entry.createdAt >= cutoff {
             for tag in entry.aiTags {
-                let normalized = tag.trimmingCharacters(in: .whitespaces)
-                guard !normalized.isEmpty else { continue }
-                freq[normalized, default: 0] += 1
+                let label = Self.humanize(tag)
+                guard !label.isEmpty, !Self.nonSymptomTags.contains(label) else { continue }
+                freq[label, default: 0] += 1
             }
         }
         tagCounts = freq
@@ -357,29 +416,25 @@ final class InsightsViewModel {
     // MARK: - On-Device Insight (Foundation Models)
 
     private func triggerOnDeviceInsight() {
-        guard !isLoadingInsight, !tagCounts.isEmpty else { return }
+        // Skip if already loading, no data, or we already have an insight for this period.
+        // `onDeviceInsight` is cleared in `selectedPeriod.didSet`, so a period change
+        // always triggers a fresh request; re-entering the tab or onChange events do not.
+        guard !isLoadingInsight, !tagCounts.isEmpty, onDeviceInsight == nil else { return }
+        // Set the flag SYNCHRONOUSLY before the Task to close the race window where
+        // multiple onChange callbacks could each pass the guard on the same run loop tick.
         isLoadingInsight = true
         let tagDict = Dictionary(uniqueKeysWithValues: tagCounts.map { ($0.tag, $0.count) })
         let periodLabel = self.selectedPeriod.label
         Task { @MainActor in
-            var insight: String? = nil
-
-            // 1. Try on-device Foundation Models first
-            if FoundationModelsService.shared.isAvailable {
-                insight = await FoundationModelsService.shared.phraseTagInsight(
+            // On-device Foundation Models only — no cloud fallback.
+            // On simulator / devices without Apple Intelligence this stays nil
+            // and the insight sentence simply isn't shown (saves an API call).
+            let insight: String? = FoundationModelsService.shared.isAvailable
+                ? await FoundationModelsService.shared.phraseTagInsight(
                     tagCounts: tagDict,
                     periodLabel: periodLabel
-                )
-            }
-
-            // 2. Gemini fallback if Foundation Models unavailable or returned nil
-            if insight == nil {
-                print("🤖 [InsightsViewModel] Foundation Models unavailable — falling back to Gemini for tag insight")
-                insight = try? await self.checklistService.phraseTagInsight(
-                    tagCounts: tagDict,
-                    periodLabel: periodLabel
-                )
-            }
+                  )
+                : nil
 
             self.onDeviceInsight = insight
             self.isLoadingInsight = false
@@ -403,13 +458,17 @@ final class InsightsViewModel {
         // Keep old summary visible while refreshing (don't clear until new one arrives)
 
         let timeRange = selectedPeriod.insightTimeRange
+        print("🧠 [InsightsViewModel] generateDeepSummary starting — period=\(selectedPeriod.label)")
 
         Task {
             do {
                 let curatedSummary = await HealthSummaryManager.shared.getCurrentSummary()
+                print("🧠 [InsightsViewModel] health_summary.md size=\(curatedSummary.count) chars")
+
                 let insights = try await LLMAnalysisService.shared.generateHealthInsights(
                     summary: curatedSummary, timeRange: timeRange
                 )
+                print("🧠 [InsightsViewModel] ✅ Insights generated successfully")
                 await MainActor.run {
                     withAnimation(.spring) {
                         self.healthSummary         = Self.renderMarkdown(from: insights)
@@ -417,9 +476,34 @@ final class InsightsViewModel {
                         self.isGeneratingSummary   = false
                     }
                 }
-            } catch {
+            } catch LLMAnalysisError.missingAPIKey {
+                print("🧠 [InsightsViewModel] ❌ FAIL — missingAPIKey: GEMINI_API_KEY is empty. Check Config.plist.")
                 await MainActor.run {
-                    self.summaryError       = "Failed to generate summary. Please try again."
+                    self.summaryError       = "API key not configured. Add GEMINI_API_KEY to Config.plist."
+                    self.isGeneratingSummary = false
+                }
+            } catch LLMAnalysisError.apiError(let code) {
+                print("🧠 [InsightsViewModel] ❌ FAIL — apiError HTTP \(code)")
+                let msg: String
+                if code == 429 {
+                    msg = "Gemini rate limit reached — too many requests in a short window. Wait a minute and try again, or check your quota at ai.google.dev/rate-limit."
+                } else {
+                    msg = "Network error (HTTP \(code)). Check your connection and try again."
+                }
+                await MainActor.run {
+                    self.summaryError        = msg
+                    self.isGeneratingSummary = false
+                }
+            } catch LLMAnalysisError.parseError {
+                print("🧠 [InsightsViewModel] ❌ FAIL — parseError: Gemini returned unexpected response format")
+                await MainActor.run {
+                    self.summaryError       = "Failed to read AI response. Please try again."
+                    self.isGeneratingSummary = false
+                }
+            } catch {
+                print("🧠 [InsightsViewModel] ❌ FAIL — unexpected error: \(error)")
+                await MainActor.run {
+                    self.summaryError       = "Failed to generate summary: \(error.localizedDescription)"
                     self.isGeneratingSummary = false
                 }
             }

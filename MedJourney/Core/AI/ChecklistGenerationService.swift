@@ -5,12 +5,12 @@ struct ChecklistGenerationItem: Codable {
     let text: String
 }
 
+/// Generates a daily wellness checklist + tag-insight phrasing from checkup data.
+/// All LLM calls route through `LLMGateway` (Groq → Gemini fallback); this service
+/// holds no API key of its own.
 final class ChecklistGenerationService {
-    private let apiKey: String
 
-    init(apiKey: String) {
-        self.apiKey = apiKey
-    }
+    init() {}
 
     func generateChecklist(ocrText: String, notes: String) async throws -> [ChecklistGenerationItem] {
         let prompt = """
@@ -100,41 +100,13 @@ final class ChecklistGenerationService {
 
     // MARK: - Private
 
+    /// Routes through the app-wide `LLMGateway` — no direct provider calls.
+    /// Provider/model/fallback order is decided entirely inside `LLMGateway`.
     private func callGemini(prompt: String, jsonMode: Bool) async throws -> String {
-        guard !apiKey.isEmpty, apiKey != "YOUR_GEMINI_API_KEY_HERE" else {
-            print("📋 [ChecklistGenerationService] ❌ API key is missing — Gemini call skipped. Add key to Config.plist or GEMINI_API_KEY env var.")
-            throw AITagError.missingAPIKey
+        do {
+            return try await LLMGateway.shared.complete(prompt: prompt, jsonMode: jsonMode)
+        } catch let error as LLMGatewayError {
+            throw error.asAITagError
         }
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "X-goog-api-key")
-
-        var body: [String: Any] = [
-            "contents": [["parts": [["text": prompt]]]]
-        ]
-        if jsonMode {
-            body["generationConfig"] = ["responseMimeType": "application/json"]
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw AITagError.apiError((response as? HTTPURLResponse)?.statusCode ?? 0)
-        }
-
-        guard
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let candidates = json["candidates"] as? [[String: Any]],
-            let content = candidates.first?["content"] as? [String: Any],
-            let parts = content["parts"] as? [[String: Any]],
-            let text = parts.first?["text"] as? String
-        else {
-            throw AITagError.parseError
-        }
-
-        return text
     }
 }

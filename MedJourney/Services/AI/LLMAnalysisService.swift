@@ -8,11 +8,11 @@
 //  (b) the curated health_summary.md slice — never raw journal history. That's how
 //  the pipeline keeps token usage ~90% below sending entries directly.
 //
-//  Backend: Google Gemini (matches the app's existing GeminiTagService /
+//  Backend: Google Gemini (matches the app's existing LLMTagService /
 //  ChecklistGenerationService). API key is read from Config.plist or the environment,
 //  never hardcoded.
 //
-//  TODO: integrate with existing GeminiTagService / ChecklistGenerationService to
+//  TODO: integrate with existing LLMTagService / ChecklistGenerationService to
 //  share a single Gemini transport if desired — kept separate here for a clean scaffold.
 //
 
@@ -36,22 +36,31 @@ enum LLMAnalysisError: LocalizedError {
 /// All outbound cloud LLM calls for the AI pipeline funnel through this type.
 final class LLMAnalysisService {
 
-    static let shared = LLMAnalysisService()
+    /// Set to `true` during development to return mock responses without hitting the
+    /// Gemini API. Flip back to `false` before testing real AI output or submitting.
+    #if DEBUG
+    static let useDryRunForDevelopment = false  // ← set true to use mock responses during UI dev
+    #endif
 
-    private let apiKey: String
-    private let session: URLSession
+    static let shared: LLMAnalysisService = {
+        #if DEBUG
+        return LLMAnalysisService(dryRun: useDryRunForDevelopment)
+        #else
+        return LLMAnalysisService()
+        #endif
+    }()
 
     /// When true, returns deterministic mock responses without hitting the network.
     /// Useful for unit tests, previews, and offline development.
     let dryRun: Bool
 
-    /// - Parameters:
-    ///   - apiKey: Resolved LLM key. Defaults to `AIConfig.llmAPIKey` (Config.plist → env → fallback).
-    ///   - dryRun: Return mocks instead of calling the API.
-    init(apiKey: String = AIConfig.llmAPIKey, session: URLSession = .shared, dryRun: Bool = false) {
-        self.apiKey = apiKey
-        self.session = session
+    /// - Parameter dryRun: Return mocks instead of calling the LLM.
+    ///
+    /// Note: this service holds no API key. All network calls route through
+    /// `LLMGateway`, which resolves the provider + key (Groq → Gemini fallback).
+    init(dryRun: Bool = false) {
         self.dryRun = dryRun
+        print("🧠 [LLMAnalysisService] init — dryRun=\(dryRun) (transport via LLMGateway)")
     }
 
     // MARK: - Checkup deep analysis
@@ -83,7 +92,7 @@ final class LLMAnalysisService {
         \(extractedText)
         """
 
-        let raw = try await callGemini(prompt: prompt, jsonMode: true)
+        let raw = try await callLLM(prompt: prompt, jsonMode: true)
         return try parseCheckupAnalysis(from: raw, rawText: extractedText)
     }
 
@@ -94,23 +103,27 @@ final class LLMAnalysisService {
         if dryRun { return Self.mockInsights(timeRange: timeRange) }
 
         let prompt = """
-        You are MedCare AI. Using ONLY the curated health summary below, write a warm trend summary for the past \(timeRange.label) and return ONLY valid JSON (no fences):
+        You are MedCare AI. Using the curated health summary below, write a warm, SPECIFIC trend summary for the past \(timeRange.label) and return ONLY valid JSON (no fences):
 
         {
-          "trend_summary": "warm, plain-language, non-diagnostic narrative",
-          "alerts": [{"message": "observational signal", "severity": "info|warning|critical"}],
+          "trend_summary": "warm, plain-language narrative that references the user's actual documented conditions, lab trends, vitals, and recent symptoms by name",
+          "alerts": [{"message": "specific observational signal drawn from the summary", "severity": "info|warning|critical"}],
           "suggest_doctor_visit": false
         }
 
-        SAFETY RULES:
-        - Describe patterns and frequencies only — never name or imply a diagnosis.
-        - Set suggest_doctor_visit to true ONLY if multiple critical signals converge.
+        WRITING RULES:
+        - Be SPECIFIC. Reference the user's actual data: name their documented conditions, cite lab markers and how they're trending (e.g. "your HbA1c has improved from 8.2% to 7.1%"), mention recurring symptoms and vital patterns. A generic summary is a failure.
+        - The conditions and lab values in the summary are the user's OWN documented medical history — you MAY reference them by name. You are summarising known history, NOT making a new diagnosis.
+        - Do NOT invent or imply any NEW condition that is not already written in the summary.
+        - "alerts" should surface the most important real signals from the summary (e.g. recurring dizziness, an elevated marker), each tied to actual data.
+        - Set suggest_doctor_visit to true ONLY if multiple concerning signals converge.
+        - Warm and encouraging tone, never alarming.
 
         Curated health summary:
         \(summary)
         """
 
-        let raw = try await callGemini(prompt: prompt, jsonMode: true)
+        let raw = try await callLLM(prompt: prompt, jsonMode: true)
         return try parseInsights(from: raw, timeRange: timeRange)
     }
 
@@ -122,27 +135,26 @@ final class LLMAnalysisService {
         if dryRun { return Self.mockGreeting() }
 
         let prompt = """
-        You are MedCare AI, a warm health companion. Based ONLY on the brief context below, write a personalized home-screen greeting and return ONLY valid JSON (no fences):
+        You are MedCare AI, a warm health companion. Based on the context below, write a personalized, SPECIFIC home-screen greeting and return ONLY valid JSON (no fences):
 
         {
-          "message": "one warm, caring greeting (max 2 sentences)",
+          "message": "EXACTLY TWO sentences (about 30–40 words). Sentence 1 names the user's specific recent situation; sentence 2 gives a brief, useful, actionable takeaway.",
           "tone": "normal|alert|critical"
         }
 
-        Tone guidance:
-        - "critical": a serious recent signal (e.g. high fever, chest pain) — gently check in, e.g. "You had a high fever yesterday — how are you feeling now?"
-        - "alert": a mild recent flag worth a soft mention.
-        - "normal": stable — e.g. "Good morning! Your vitals have been stable this week."
-
-        SAFETY RULES:
+        WRITING RULES:
+        - The message must be TWO sentences. Sentence 1: warmly name a concrete detail from the context (a recent symptom like the dizziness, a lab trend like improving blood sugar, or how their week went). Sentence 2: a short useful takeaway — gentle encouragement, one thing to watch, or a nudge worth acting on today.
+        - Be SPECIFIC to this user. A generic "hope you're well" greeting is a failure.
+        - The conditions and values in the context are the user's OWN documented history — you MAY mention them. This is not a new diagnosis.
+        - Do NOT invent any NEW condition not present in the context.
+        - Tone: "critical" for a serious recent signal, "alert" for a mild recent flag, "normal" when stable/improving.
         - Warm and caring, never clinical or alarming.
-        - Do NOT name or imply any diagnosis.
 
         Daily summary context:
         \(summaryContext)
         """
 
-        let raw = try await callGemini(prompt: prompt, jsonMode: true)
+        let raw = try await callLLM(prompt: prompt, jsonMode: true)
         return try parseGreeting(from: raw)
     }
 
@@ -165,7 +177,7 @@ final class LLMAnalysisService {
         Text: \(journalText.prefix(500))
         """
 
-        let raw = try await callGemini(prompt: prompt, jsonMode: true)
+        let raw = try await callLLM(prompt: prompt, jsonMode: true)
         let cleaned = raw
             .replacingOccurrences(of: "```json", with: "")
             .replacingOccurrences(of: "```", with: "")
@@ -177,36 +189,18 @@ final class LLMAnalysisService {
         return labels.prefix(6).map { HealthTag(label: $0, category: .symptom, source: .llm) }
     }
 
-    // MARK: - Gemini transport
+    // MARK: - LLM transport (delegates to the single gate)
 
-    /// Low-level Gemini call. Mirrors the existing GeminiTagService transport.
-    private func callGemini(prompt: String, jsonMode: Bool) async throws -> String {
-        guard !apiKey.isEmpty, apiKey != "YOUR_GEMINI_API_KEY_HERE" else {
-            throw LLMAnalysisError.missingAPIKey
+    /// Thin wrapper around the app-wide `LLMGateway`. All provider routing, fallback,
+    /// and retry logic lives in the gateway — this just bridges the gateway's error
+    /// type to `LLMAnalysisError` so the Insights deep-summary flow can keep catching
+    /// its specific cases (`.missingAPIKey`, `.apiError`, `.parseError`).
+    private func callLLM(prompt: String, jsonMode: Bool) async throws -> String {
+        do {
+            return try await LLMGateway.shared.complete(prompt: prompt, jsonMode: jsonMode)
+        } catch let error as LLMGatewayError {
+            throw error.asLLMAnalysisError
         }
-
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "X-goog-api-key")
-
-        var body: [String: Any] = ["contents": [["parts": [["text": prompt]]]]]
-        if jsonMode { body["generationConfig"] = ["responseMimeType": "application/json"] }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw LLMAnalysisError.apiError((response as? HTTPURLResponse)?.statusCode ?? 0)
-        }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = json["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let text = parts.first?["text"] as? String else {
-            throw LLMAnalysisError.parseError
-        }
-        return text
     }
 
     // MARK: - Parsing
@@ -239,8 +233,11 @@ final class LLMAnalysisService {
     }
 
     private func parseInsights(from raw: String, timeRange: InsightTimeRange) throws -> HealthInsights {
-        guard let data = Self.strip(raw).data(using: .utf8),
+        let stripped = Self.strip(raw)
+        print("🧠 [LLMAnalysisService] parseInsights — strippedLen=\(stripped.count), prefix: \(stripped.prefix(120))")
+        guard let data = stripped.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("🧠 [LLMAnalysisService] ❌ parseInsights failed — JSONSerialization returned nil or not [String:Any]")
             throw LLMAnalysisError.parseError
         }
         let alerts: [HealthAlert] = (obj["alerts"] as? [[String: Any]] ?? []).map {

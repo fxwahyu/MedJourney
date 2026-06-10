@@ -25,7 +25,7 @@ final class JournalEntryViewModel {
 
     private let tagService: AITagServiceProtocol
 
-    init(tagService: AITagServiceProtocol = GeminiTagService(apiKey: AIConfig.llmAPIKey)) {
+    init(tagService: AITagServiceProtocol = LLMTagService()) {
         self.tagService = tagService
     }
 
@@ -429,7 +429,7 @@ final class JournalEntryViewModel {
             var images: [UIImage] = []
             for item in items {
                 if let data  = try? await item.loadTransferable(type: Data.self),
-                   let image = UIImage(data: data) {
+                   let image = ImageDownsampler.downsampled(from: data) {
                     images.append(image)
                 }
             }

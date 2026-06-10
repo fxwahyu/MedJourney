@@ -3,7 +3,6 @@ import SwiftData
 
 struct ContentView: View {
 
-    @Environment(\.dependencyContainer) private var container
     @State private var selectedTab = 0
     @State private var showAddContent = false
     @State private var showMoodSheet = false

@@ -53,11 +53,91 @@ actor HealthSummaryManager {
         getCurrentSummary().count / 4
     }
 
-    /// Returns ONLY the "Daily Summary Context" section — a much smaller slice than
-    /// the full file, used by the home-screen greeting generator.
+    /// Returns a compact context slice for the home-screen greeting generator.
+    ///
+    /// Priority:
+    ///  1. The explicit `## Daily Summary Context` section if it has real content
+    ///     (written by `updateDailySummaryContext()` after each entry/checkup save).
+    ///  2. A synthesised snapshot built from the populated journal-tag and checkup
+    ///     sections — used when the explicit section hasn't been written yet (e.g.
+    ///     seed data, first launch, or fresh install).
+    ///  3. A fallback string so the LLM still gets *something*.
     func getDailySummaryContext() -> String {
-        Self.extractSection(named: "Daily Summary Context", from: getCurrentSummary())
-            ?? "No recent health context available yet."
+        let content = getCurrentSummary()
+
+        // 1. Prefer the explicit, pre-written context section.
+        if let explicit = Self.extractSection(named: "Daily Summary Context", from: content),
+           !explicit.isEmpty,
+           !explicit.contains("No recent health context") {
+            return explicit
+        }
+
+        // 2. Synthesise from the sections that ARE populated.
+        var parts: [String] = []
+        if let tags = Self.extractSection(named: "Recent Journal Tags", from: content),
+           !tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Recent journal observations:\n\(tags)")
+        }
+        if let flagged = Self.extractSection(named: "Flagged Abnormals", from: content),
+           !flagged.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Flagged lab / vital results:\n\(flagged)")
+        }
+        if let notes = Self.extractSection(named: "Doctor Notes & Follow-ups", from: content),
+           !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Doctor notes:\n\(notes)")
+        }
+        if let meds = Self.extractSection(named: "Medications", from: content),
+           !meds.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Current medications:\n\(meds)")
+        }
+
+        guard !parts.isEmpty else { return "No recent health context available yet." }
+        return parts.joined(separator: "\n\n")
+    }
+
+    /// Populates the MD file from an existing array of `JournalEntry` objects.
+    ///
+    /// Called at app launch when `health_summary.md` is empty (e.g. seed data was
+    /// inserted directly into SwiftData, bypassing the normal `saveEntry` pipeline).
+    /// Safe to call repeatedly — it only runs if the "Recent Journal Tags" section
+    /// has fewer entries than what's in SwiftData.
+    func bootstrapFromEntries(_ entries: [JournalEntry]) {
+        let content = getCurrentSummary()
+        let existingTags = Self.extractSection(named: "Recent Journal Tags", from: content) ?? ""
+        let existingCount = existingTags.components(separatedBy: "\n")
+            .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("-") }.count
+
+        // Only bootstrap if the file has significantly fewer entries than SwiftData.
+        let journalEntries = entries.filter { $0.entryType == .journal }
+        guard existingCount < journalEntries.count else { return }
+
+        var updated = content
+        let dateFormatter: DateFormatter = {
+            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f
+        }()
+
+        // Inject journal tag lines for entries that have aiTags, sorted oldest → newest.
+        for entry in journalEntries.sorted(by: { $0.createdAt < $1.createdAt }) {
+            let tagPart = entry.aiTags.isEmpty
+                ? (entry.title.isEmpty ? "(no tags)" : entry.title)
+                : entry.aiTags.joined(separator: ", ")
+            var vitals: [String] = []
+            if let bp   = entry.bloodPressure { vitals.append("BP \(bp)") }
+            if let temp = entry.temperature   { vitals.append("Temp \(temp)") }
+            if let hr   = entry.heartRate     { vitals.append("HR \(hr)") }
+            let vitalsPart = vitals.isEmpty ? "" : " | Vitals: \(vitals.joined(separator: ", "))"
+            let line = "- \(dateFormatter.string(from: entry.createdAt)): \(tagPart)\(vitalsPart)"
+            updated = Self.appendToSection(
+                named: "Recent Journal Tags (last 30 entries max)",
+                line: line,
+                in: updated,
+                cappedAt: maxJournalTagEntries
+            )
+        }
+
+        updated = Self.touchLastUpdated(updated)
+        persist(updated)
+        print("📋 [HealthSummaryManager] Bootstrapped health_summary.md from \(journalEntries.count) existing entries.")
     }
 
     /// Appends a compact journal summary line + tags to the file after a journal save.
@@ -123,7 +203,7 @@ actor HealthSummaryManager {
     }
 
     /// Feeds the curated MD file from a checkup result the *existing* live flow already
-    /// produced (`GeminiTagService` tags + Markdown `aiAnalysis`) — instead of running
+    /// produced (`LLMTagService` tags + Markdown `aiAnalysis`) — instead of running
     /// `LLMAnalysisService.analyzeCheckup` a second time. This keeps the live checkup
     /// pipeline byte-for-byte unchanged while still building the curated knowledge base.
     ///
@@ -149,6 +229,14 @@ actor HealthSummaryManager {
 
         content = Self.touchLastUpdated(content)
         persist(content)
+    }
+
+    /// Returns true when the MD file has no real journal or checkup data yet —
+    /// i.e. the "Recent Journal Tags" section is empty. Used to decide whether to
+    /// invalidate the DailySummaryService greeting cache after a bootstrap.
+    func isEffectivelyEmpty() -> Bool {
+        let tags = Self.extractSection(named: "Recent Journal Tags", from: getCurrentSummary()) ?? ""
+        return tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// The last-modified time of the file on disk — used by the greeting cache to

@@ -11,8 +11,8 @@
 //
 //  Integration tests (real network, ~5–30 s each):
 //    - testKeyAvailability         → verifies Config.plist can be read from the app bundle
-//    - testGeminiJournalTagging    → GeminiTagService, journal entry → tags
-//    - testGeminiCheckupAnalysis   → GeminiTagService, checkup entry → tags + analysis
+//    - testGeminiJournalTagging    → LLMTagService, journal entry → tags
+//    - testGeminiCheckupAnalysis   → LLMTagService, checkup entry → tags + analysis
 //    - testLLMAnalysisDailyGreeting → LLMAnalysisService, greeting endpoint
 //    - testLLMAnalysisHealthInsights → LLMAnalysisService, insights endpoint
 //    - testChecklistGeneration     → ChecklistGenerationService, generates ≥1 item
@@ -71,72 +71,24 @@ struct MedJourneyAITests {
     }
 
     // ─────────────────────────────────────────────────
-    // MARK: Empty / Placeholder Key Guards (unit, no network)
+    // MARK: Key Guards
     // ─────────────────────────────────────────────────
-
-    @Test("GeminiTagService: empty key throws missingAPIKey (no network call)")
-    func testGeminiTagServiceEmptyKeyThrows() async {
-        let service = GeminiTagService(apiKey: "")
-        let entry = JournalEntry(title: "Tired", content: "Headache all day", entryType: .journal)
-        do {
-            _ = try await service.generateTags(for: entry)
-            Issue.record("Expected AITagError.missingAPIKey but no error was thrown")
-        } catch AITagError.missingAPIKey {
-            // ✅ correct guard fired
-        } catch {
-            Issue.record("Wrong error type — expected missingAPIKey, got: \(error)")
-        }
-    }
-
-    @Test("GeminiTagService: placeholder key throws missingAPIKey (no network call)")
-    func testGeminiTagServicePlaceholderKeyThrows() async {
-        let service = GeminiTagService(apiKey: "YOUR_GEMINI_API_KEY_HERE")
-        let entry = JournalEntry(title: "Good", content: "Feeling ok", entryType: .journal)
-        do {
-            _ = try await service.generateTags(for: entry)
-            Issue.record("Expected AITagError.missingAPIKey but no error was thrown")
-        } catch AITagError.missingAPIKey {
-            // ✅
-        } catch {
-            Issue.record("Wrong error type — expected missingAPIKey, got: \(error)")
-        }
-    }
-
-    @Test("ChecklistGenerationService: empty key throws missingAPIKey (no network call)")
-    func testChecklistServiceEmptyKeyThrows() async {
-        let service = ChecklistGenerationService(apiKey: "")
-        do {
-            _ = try await service.generateChecklist(ocrText: "Hemoglobin 11.2", notes: "Routine checkup")
-            Issue.record("Expected AITagError.missingAPIKey but no error was thrown")
-        } catch AITagError.missingAPIKey {
-            // ✅
-        } catch {
-            Issue.record("Wrong error type — expected missingAPIKey, got: \(error)")
-        }
-    }
-
-    @Test("LLMAnalysisService: empty key throws missingAPIKey (no network call)")
-    func testLLMServiceEmptyKeyThrows() async {
-        let service = LLMAnalysisService(apiKey: "", dryRun: false)
-        do {
-            _ = try await service.analyzeCheckup(extractedText: "Hemoglobin 11.2 g/dL")
-            Issue.record("Expected LLMAnalysisError.missingAPIKey but no error was thrown")
-        } catch LLMAnalysisError.missingAPIKey {
-            // ✅
-        } catch {
-            Issue.record("Wrong error type — expected missingAPIKey, got: \(error)")
-        }
-    }
+    //
+    // Per-service "empty key throws missingAPIKey" tests were removed: API-key
+    // resolution is now centralized in `LLMGateway` (Groq → Gemini), not injected
+    // per service. The services (`LLMTagService`, `ChecklistGenerationService`,
+    // `LLMAnalysisService`) no longer hold a key. Missing-key behavior is the
+    // gateway's responsibility; it skips a provider with no key and falls through.
 
     // ─────────────────────────────────────────────────
     // MARK: Medication Entry Fast-Path (unit, no network)
     // ─────────────────────────────────────────────────
 
     /// Medication entries have no prompt — the service returns empty tags
-    /// without making any network call, even with a valid key.
-    @Test("GeminiTagService: medication entry returns empty tags (no network call)")
+    /// without making any network call.
+    @Test("LLMTagService: medication entry returns empty tags (no network call)")
     func testMedicationEntryReturnsEmpty() async throws {
-        let service = GeminiTagService(apiKey: "any-key-wont-be-called")
+        let service = LLMTagService()
         let entry = JournalEntry(title: "Metformin 500mg", content: "Twice daily with meals", entryType: .medication)
         let result = try await service.generateTags(for: entry)
         #expect(result.tags.isEmpty, "Medication entries must return empty tags")
@@ -149,7 +101,7 @@ struct MedJourneyAITests {
 
     @Test("LLMAnalysisService dryRun: analyzeCheckup returns mock summary")
     func testDryRunCheckupAnalysis() async throws {
-        let service = LLMAnalysisService(apiKey: "fake-key", dryRun: true)
+        let service = LLMAnalysisService(dryRun: true)
         let result = try await service.analyzeCheckup(extractedText: "Hemoglobin 11.2 g/dL (low)")
         #expect(!result.summary.isEmpty, "dryRun checkup summary must not be empty")
         #expect(!result.flaggedMarkers.isEmpty, "dryRun must include at least one flagged marker")
@@ -157,7 +109,7 @@ struct MedJourneyAITests {
 
     @Test("LLMAnalysisService dryRun: generateHealthInsights returns mock trend")
     func testDryRunHealthInsights() async throws {
-        let service = LLMAnalysisService(apiKey: "fake-key", dryRun: true)
+        let service = LLMAnalysisService(dryRun: true)
         let result = try await service.generateHealthInsights(
             summary: "BP elevated several days this week.",
             timeRange: .sevenDays
@@ -167,14 +119,14 @@ struct MedJourneyAITests {
 
     @Test("LLMAnalysisService dryRun: generateDailyGreeting returns mock message")
     func testDryRunDailyGreeting() async throws {
-        let service = LLMAnalysisService(apiKey: "fake-key", dryRun: true)
+        let service = LLMAnalysisService(dryRun: true)
         let result = try await service.generateDailyGreeting(summaryContext: "BP stable, good sleep.")
         #expect(!result.message.isEmpty, "dryRun greeting message must not be empty")
     }
 
     @Test("LLMAnalysisService dryRun: generateDailyTags returns mock tags")
     func testDryRunDailyTags() async throws {
-        let service = LLMAnalysisService(apiKey: "fake-key", dryRun: true)
+        let service = LLMAnalysisService(dryRun: true)
         let result = try await service.generateDailyTags(journalText: "Tired and headache after lunch")
         #expect(!result.isEmpty, "dryRun daily tags must return at least one tag")
     }
@@ -194,7 +146,7 @@ struct MedJourneyAITests {
             return
         }
 
-        let service = GeminiTagService(apiKey: key)
+        let service = LLMTagService()
         let entry = JournalEntry(
             title: "Tired",
             content: "Exhausted after lunch, mild headache, drinking lots of water. BP a bit high.",
@@ -219,7 +171,7 @@ struct MedJourneyAITests {
             return
         }
 
-        let service = GeminiTagService(apiKey: key)
+        let service = LLMTagService()
         let entry = JournalEntry(
             title: "Lab Results — Mayapada Hospital",
             content: "Emergency Department visit. CBC, COVID/Influenza rapid panel.",
@@ -250,7 +202,7 @@ struct MedJourneyAITests {
             return
         }
 
-        let service = LLMAnalysisService(apiKey: key, dryRun: false)
+        let service = LLMAnalysisService(dryRun: false)
         let greeting = try await service.generateDailyGreeting(
             summaryContext: "BP was 132/85 yesterday. Patient is on Metformin and Amlodipine. Energy improving."
         )
@@ -268,7 +220,7 @@ struct MedJourneyAITests {
             return
         }
 
-        let service = LLMAnalysisService(apiKey: key, dryRun: false)
+        let service = LLMAnalysisService(dryRun: false)
         let insights = try await service.generateHealthInsights(
             summary: """
             Patient: Type 2 diabetes. Medications: Metformin 500mg, Glipizide 5mg, Amlodipine 5mg.
@@ -291,7 +243,7 @@ struct MedJourneyAITests {
             return
         }
 
-        let service = ChecklistGenerationService(apiKey: key)
+        let service = ChecklistGenerationService()
         let items = try await service.generateChecklist(
             ocrText: "Hemoglobin 16.4 g/dL. RBC 5.6 (slightly elevated). Monocytes 15.4% (elevated). All infection panels negative.",
             notes: "Type 2 diabetes patient. On Metformin 500mg twice daily and Amlodipine 5mg at night."
@@ -303,6 +255,43 @@ struct MedJourneyAITests {
         #expect(items.count <= 5, "ChecklistGenerationService must return at most 5 items")
     }
 
+    /// Exercises the exact code path that InsightsViewModel.generateDeepSummary() uses.
+    /// If this passes but the in-app button fails, the issue is in key resolution (Config.plist
+    /// not in app bundle) rather than in the network stack.
+    @Test("Gemini API: full deep-insight path (mirrors InsightsViewModel.generateDeepSummary)", .timeLimit(.minutes(2)))
+    func testDeepInsightFullPath() async throws {
+        let key = resolveGeminiKey()
+        guard !key.isEmpty else {
+            print("⚠️  [testDeepInsightFullPath] SKIPPED — no GEMINI_API_KEY resolved")
+            return
+        }
+
+        // Simulate what HealthSummaryManager.getCurrentSummary() returns after seed data
+        let fakeSummary = """
+        # Health Summary
+        ## Active Conditions
+        - Type 2 Diabetes (on Metformin, Glipizide)
+        - Stage 1 Hypertension (on Amlodipine)
+        ## Recent Journal Tags
+        - fatigue, elevated-BP, dizziness, headache, nausea
+        ## Flagged Abnormals
+        - HbA1c 8.2% (normal: <5.7%) — from checkup
+        - Monocytes 15.4% (normal: 4-10%) — elevated
+        ## Daily Summary Context
+        Two consecutive days of dizziness and elevated heart rate (HR 86-88).
+        """
+
+        let service = LLMAnalysisService(dryRun: false)
+        let insights = try await service.generateHealthInsights(
+            summary: fakeSummary,
+            timeRange: .thirtyDays
+        )
+
+        print("✅ [testDeepInsightFullPath] trendSummary: \(insights.trendSummary.prefix(200))")
+        print("   alerts: \(insights.alerts.count), suggestVisit: \(insights.suggestDoctorVisit)")
+        #expect(!insights.trendSummary.isEmpty, "Deep insight trend summary should not be empty")
+    }
+
     @Test("Gemini API: phraseTagInsight from ChecklistGenerationService", .timeLimit(.minutes(2)))
     func testPhraseTagInsight() async throws {
         let key = resolveGeminiKey()
@@ -311,7 +300,7 @@ struct MedJourneyAITests {
             return
         }
 
-        let service = ChecklistGenerationService(apiKey: key)
+        let service = ChecklistGenerationService()
         let tagCounts: [String: Int] = [
             "fatigue": 8,
             "headache": 5,

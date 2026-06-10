@@ -27,10 +27,51 @@ final class HomeViewModel {
     /// True while either Foundation Models or the curated cloud greeting is generating.
     var isLoadingWelcome: Bool = false
 
+    /// Whether the briefing should play its typing animation on next display.
+    /// Only true for a FRESHLY generated message (animate once). A message restored
+    /// from cache — already seen by the user — shows in full instantly. The view
+    /// flips this back to false via `TypingTextView.onFinished` after it plays.
+    var shouldAnimateBriefing: Bool = false
+
+    // MARK: - Briefing day-cache
+    //
+    // The welcome briefing must be generated ONCE per day, regardless of which path
+    // produced it (on-device Foundation Models OR cloud greeting). We persist the
+    // FINAL message here and restore it in `init()`, so tab re-appearances, sheet
+    // dismissals, and SwiftUI view re-creation (which resets @State) never re-fire
+    // the AI call when today's message already exists.
+
+    private static let briefingMessageKey = "HomeBriefing.message"
+    private static let briefingDateKey    = "HomeBriefing.generatedAt"
+
+    /// True once we've produced (or restored) today's briefing — blocks re-generation
+    /// even within the same session if the persisted message was cleared.
+    private var hasLoadedToday = false
+
+    // MARK: - Init
+
+    init() {
+        if let generated = UserDefaults.standard.object(forKey: Self.briefingDateKey) as? Date,
+           Calendar.current.isDateInToday(generated),
+           let cached = UserDefaults.standard.string(forKey: Self.briefingMessageKey),
+           !cached.isEmpty {
+            aiWelcomeMessage = cached
+            hasLoadedToday   = true
+            AIBriefingStore.shared.message = cached
+        }
+    }
+
+    /// Persists the briefing for the rest of the day so it survives view re-creation.
+    private func cacheBriefing(_ message: String) {
+        UserDefaults.standard.set(message, forKey: Self.briefingMessageKey)
+        UserDefaults.standard.set(Date(), forKey: Self.briefingDateKey)
+    }
+
     // MARK: - Intents
 
     func loadWelcomeInsight(entries: [JournalEntry], anomalies: [VitalsAnomaly]) {
-        guard !isLoadingWelcome, aiWelcomeMessage == nil else { return }
+        // Skip if already loading, or we already have today's briefing (in memory or cached).
+        guard !isLoadingWelcome, !hasLoadedToday, aiWelcomeMessage == nil else { return }
 
         isLoadingWelcome = true
 
@@ -46,13 +87,30 @@ final class HomeViewModel {
         Task { @MainActor in
             var message: String? = nil
 
+            // 0. Ensure health_summary.md has data before the greeting reads it.
+            //    If entries came from seed / direct SwiftData insert (bypassing the
+            //    normal saveEntry pipeline), the MD file would be empty and the LLM
+            //    would produce a generic response. bootstrapFromEntries is a no-op
+            //    once the file is already populated.
+            let wasEmpty = await HealthSummaryManager.shared.isEffectivelyEmpty()
+            await HealthSummaryManager.shared.bootstrapFromEntries(entries)
+            // If the file was just bootstrapped, invalidate the stale DailySummaryService
+            // cache so the greeting is re-generated with real data (not the cached generic one).
+            if wasEmpty { DailySummaryService.shared.invalidateCache() }
+
+            // Pull the curated MD context slice so BOTH paths can reference the user's
+            // real documented history (conditions, lab trends, recent patterns) instead
+            // of just loose tags — this is what makes the briefing specific, not generic.
+            let mdContext = await HealthSummaryManager.shared.getDailySummaryContext()
+
             // 1. Try on-device Foundation Models first
             if FoundationModelsService.shared.isAvailable {
                 message = await FoundationModelsService.shared.generateWelcomeInsight(
                     recentTags: recentTags,
                     anomalyMessages: anomalyMsgs,
                     yesterdayCompletion: yesterdayRate,
-                    daysSinceLastEntry: daysSince
+                    daysSinceLastEntry: daysSince,
+                    healthContext: mdContext
                 )
             }
 
@@ -64,6 +122,14 @@ final class HomeViewModel {
                 if let greeting = try? await DailySummaryService.shared.generateGreeting() {
                     message = greeting.message
                 }
+            }
+
+            // Persist today's briefing so it survives view re-creation / tab switches.
+            if let message, !message.isEmpty {
+                self.cacheBriefing(message)
+                self.hasLoadedToday = true
+                // Freshly generated → play the typing animation exactly once.
+                self.shouldAnimateBriefing = true
             }
 
             withAnimation(.easeIn(duration: 0.3)) {

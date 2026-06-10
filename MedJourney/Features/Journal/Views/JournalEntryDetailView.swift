@@ -13,7 +13,7 @@ struct JournalEntryDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var isGeneratingTags = false
-    private let tagService = GeminiTagService(apiKey: AIConfig.llmAPIKey)
+    private let tagService = LLMTagService()
 
     // MARK: - Body
 
@@ -274,14 +274,10 @@ struct JournalEntryDetailView: View {
                 .foregroundStyle(AppColors.textTertiary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: AppSpacing.md) {
-                    ForEach(data, id: \.self) { d in
-                        if let img = UIImage(data: d) {
-                            Image(uiImage: img)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 120, height: 160)
-                                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
-                        }
+                    ForEach(Array(data.enumerated()), id: \.offset) { _, d in
+                        DownsampledImage(data: d, size: CGSize(width: 120, height: 160))
+                            .frame(width: 120, height: 160)
+                            .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
                     }
                 }
             }

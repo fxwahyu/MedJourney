@@ -211,7 +211,9 @@ struct HomeTabView: View {
                     font: AppFont.body.font,
                     color: AppColors.textSecondary,
                     loop: false,
-                    lineLimit: nil
+                    lineLimit: nil,
+                    animated: viewModel.shouldAnimateBriefing,
+                    onFinished: { viewModel.shouldAnimateBriefing = false }
                 )
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }

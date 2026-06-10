@@ -8,7 +8,7 @@
 //  - `.local`  → extracted on-device via Apple Foundation Models (zero tokens)
 //  - `.llm`    → extracted by the cloud LLM (fallback only)
 //
-//  Tags are observational, never diagnostic (see existing GeminiTagService safety rules).
+//  Tags are observational, never diagnostic (see existing LLMTagService safety rules).
 //
 
 import Foundation
@@ -65,12 +65,12 @@ struct HealthTag: Identifiable, Codable, Hashable {
 extension HealthTag {
 
     /// Builds `HealthTag`s from plain label strings — e.g. the comma-separated tags
-    /// already produced by `GeminiTagService` / `FoundationModelsService`.
+    /// already produced by `LLMTagService` / `FoundationModelsService`.
     ///
     /// Used to feed the curated `health_summary.md` knowledge base from results the
     /// live AI flows already generated, instead of running a second extraction pass.
     /// Categorizes a label as `.vitalAlert` when it mentions common vitals keywords
-    /// (mirrors the observational vocabulary in `GeminiTagService`'s prompt rules);
+    /// (mirrors the observational vocabulary in `LLMTagService`'s prompt rules);
     /// everything else is treated as a `.symptom` observation.
     static func from(labels: [String], source: Source, date: Date = Date()) -> [HealthTag] {
         let vitalKeywords = ["bp", "blood pressure", "heart rate", "pulse", "fever", "temperature"]

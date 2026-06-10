@@ -58,6 +58,18 @@ final class DailySummaryService {
         return greeting
     }
 
+    /// Clears the cached greeting so the next `generateGreeting()` call fetches a
+    /// fresh one. Used after `HealthSummaryManager.bootstrapFromEntries()` writes
+    /// real data into a previously empty file — without this, the stale "No recent
+    /// health context" greeting would be served from cache all day.
+    func invalidateCache() {
+        defaults.removeObject(forKey: cacheGeneratedAtKey)
+        defaults.removeObject(forKey: cacheMessageKey)
+        defaults.removeObject(forKey: cacheToneKey)
+        defaults.removeObject(forKey: cacheMDModifiedKey)
+        print("🗑️ [DailySummaryService] Cache invalidated — next call will regenerate greeting.")
+    }
+
     /// True if the greeting should be regenerated:
     /// - last generation was before today (calendar rollover), OR
     /// - the MD file changed since the cached greeting was generated, OR
