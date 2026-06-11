@@ -25,6 +25,7 @@ actor HealthSummaryManager {
 
     /// Max journal tag lines retained in the MD file to prevent unbounded growth.
     private let maxJournalTagEntries = 30
+    private let maxCheckupResults = 20
 
     /// On-disk location: `<Documents>/health_summary.md`.
     private let fileURL: URL
@@ -78,6 +79,10 @@ actor HealthSummaryManager {
            !tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             parts.append("Recent journal observations:\n\(tags)")
         }
+        if let checkups = Self.extractSection(named: "Recent Checkup Results", from: content),
+           !checkups.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append("Recent checkup results:\n\(checkups)")
+        }
         if let flagged = Self.extractSection(named: "Flagged Abnormals", from: content),
            !flagged.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             parts.append("Flagged lab / vital results:\n\(flagged)")
@@ -104,12 +109,19 @@ actor HealthSummaryManager {
     func bootstrapFromEntries(_ entries: [JournalEntry]) {
         let content = getCurrentSummary()
         let existingTags = Self.extractSection(named: "Recent Journal Tags", from: content) ?? ""
-        let existingCount = existingTags.components(separatedBy: "\n")
+        let existingJournalCount = existingTags.components(separatedBy: "\n")
+            .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("-") }.count
+        let existingCheckups = Self.extractSection(named: "Recent Checkup Results", from: content) ?? ""
+        let existingCheckupCount = existingCheckups.components(separatedBy: "\n")
             .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("-") }.count
 
-        // Only bootstrap if the file has significantly fewer entries than SwiftData.
         let journalEntries = entries.filter { $0.entryType == .journal }
-        guard existingCount < journalEntries.count else { return }
+        let checkupEntries = entries.filter { $0.entryType == .checkup }
+
+        // Only bootstrap if the file has fewer rows than SwiftData for EITHER type.
+        let needsJournal = existingJournalCount < journalEntries.count
+        let needsCheckups = existingCheckupCount < checkupEntries.count
+        guard needsJournal || needsCheckups else { return }
 
         var updated = content
         let dateFormatter: DateFormatter = {
@@ -117,27 +129,47 @@ actor HealthSummaryManager {
         }()
 
         // Inject journal tag lines for entries that have aiTags, sorted oldest → newest.
-        for entry in journalEntries.sorted(by: { $0.createdAt < $1.createdAt }) {
-            let tagPart = entry.aiTags.isEmpty
-                ? (entry.title.isEmpty ? "(no tags)" : entry.title)
-                : entry.aiTags.joined(separator: ", ")
-            var vitals: [String] = []
-            if let bp   = entry.bloodPressure { vitals.append("BP \(bp)") }
-            if let temp = entry.temperature   { vitals.append("Temp \(temp)") }
-            if let hr   = entry.heartRate     { vitals.append("HR \(hr)") }
-            let vitalsPart = vitals.isEmpty ? "" : " | Vitals: \(vitals.joined(separator: ", "))"
-            let line = "- \(dateFormatter.string(from: entry.createdAt)): \(tagPart)\(vitalsPart)"
-            updated = Self.appendToSection(
-                named: "Recent Journal Tags (last 30 entries max)",
-                line: line,
-                in: updated,
-                cappedAt: maxJournalTagEntries
-            )
+        if needsJournal {
+            for entry in journalEntries.sorted(by: { $0.createdAt < $1.createdAt }) {
+                let tagPart = entry.aiTags.isEmpty
+                    ? (entry.title.isEmpty ? "(no tags)" : entry.title)
+                    : entry.aiTags.joined(separator: ", ")
+                var vitals: [String] = []
+                if let bp   = entry.bloodPressure { vitals.append("BP \(bp)") }
+                if let temp = entry.temperature   { vitals.append("Temp \(temp)") }
+                if let hr   = entry.heartRate     { vitals.append("HR \(hr)") }
+                let vitalsPart = vitals.isEmpty ? "" : " | Vitals: \(vitals.joined(separator: ", "))"
+                let line = "- \(dateFormatter.string(from: entry.createdAt)): \(tagPart)\(vitalsPart)"
+                updated = Self.appendToSection(
+                    named: "Recent Journal Tags (last 30 entries max)",
+                    line: line,
+                    in: updated,
+                    cappedAt: maxJournalTagEntries
+                )
+            }
+        }
+
+        // Inject checkup result lines so checkup-only users still get a specific
+        // briefing. Captures ALL markers (normal included) as a compact summary —
+        // an all-normal panel should let the briefing say "your bloodwork looked healthy".
+        if needsCheckups {
+            for entry in checkupEntries.sorted(by: { $0.createdAt < $1.createdAt }) {
+                let summary = entry.aiTags.isEmpty
+                    ? "checkup logged"
+                    : entry.aiTags.prefix(6).joined(separator: ", ")
+                let line = "- \(dateFormatter.string(from: entry.createdAt)): \(summary)"
+                updated = Self.appendToSection(
+                    named: "Recent Checkup Results (last 20 max)",
+                    line: line,
+                    in: updated,
+                    cappedAt: maxCheckupResults
+                )
+            }
         }
 
         updated = Self.touchLastUpdated(updated)
         persist(updated)
-        print("📋 [HealthSummaryManager] Bootstrapped health_summary.md from \(journalEntries.count) existing entries.")
+        print("📋 [HealthSummaryManager] Bootstrapped health_summary.md from \(journalEntries.count) journal + \(checkupEntries.count) checkup entries.")
     }
 
     /// Appends a compact journal summary line + tags to the file after a journal save.
@@ -222,6 +254,18 @@ actor HealthSummaryManager {
             content = Self.appendToSection(named: "Flagged Abnormals", line: line, in: content, cappedAt: 50)
         }
 
+        // Always record a compact result summary (normal panels included) so the daily
+        // briefing has something specific to reference even when nothing is flagged.
+        if !tags.isEmpty {
+            let summary = tags.prefix(6).joined(separator: ", ")
+            content = Self.appendToSection(
+                named: "Recent Checkup Results (last 20 max)",
+                line: "- \(dateStr): \(summary)",
+                in: content,
+                cappedAt: maxCheckupResults
+            )
+        }
+
         if let analysisMarkdown, let excerpt = Self.firstPlainSentence(from: analysisMarkdown) {
             let note = "- \(dateStr): \(excerpt)"
             content = Self.appendToSection(named: "Doctor Notes & Follow-ups", line: note, in: content, cappedAt: 30)
@@ -235,8 +279,11 @@ actor HealthSummaryManager {
     /// i.e. the "Recent Journal Tags" section is empty. Used to decide whether to
     /// invalidate the DailySummaryService greeting cache after a bootstrap.
     func isEffectivelyEmpty() -> Bool {
-        let tags = Self.extractSection(named: "Recent Journal Tags", from: getCurrentSummary()) ?? ""
+        let content = getCurrentSummary()
+        let tags = Self.extractSection(named: "Recent Journal Tags", from: content) ?? ""
+        let checkups = Self.extractSection(named: "Recent Checkup Results", from: content) ?? ""
         return tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && checkups.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// The last-modified time of the file on disk — used by the greeting cache to
@@ -269,6 +316,8 @@ actor HealthSummaryManager {
         |--------|--------------|--------|
 
         ## Recent Journal Tags (last 30 entries max)
+
+        ## Recent Checkup Results (last 20 max)
 
         ## Medications
 
