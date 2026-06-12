@@ -62,7 +62,6 @@ struct MedicineScheduleCard: View {
                     .foregroundStyle(AppColors.textSecondary)
             }
             Spacer()
-            // Prototype uses c-insights (indigo) for the pills icon
             Image(systemName: "pills.fill")
                 .font(.system(size: 24))
                 .foregroundStyle(AppColors.indigo.opacity(0.5))
@@ -91,14 +90,12 @@ struct MedicineScheduleCard: View {
 
     private func timelineRow(entry: ScheduleEntry, isLast: Bool) -> some View {
         HStack(alignment: .top, spacing: AppSpacing.md) {
-            // Mono time — prototype uses `className="mono"` font
             Text(entry.time)
                 .appFont(.mono)
                 .foregroundStyle(entry.isPast ? AppColors.textTertiary : AppColors.textPrimary)
                 .frame(width: 46, alignment: .leading)
                 .padding(.top, 1)
 
-            // Timeline indicator — prototype uses c-insights (#7C6BD9) for dots/lines
             VStack(spacing: 0) {
                 Circle()
                     .fill(entry.isPast ? AppColors.indigo.opacity(0.35) : AppColors.indigo)
@@ -129,7 +126,6 @@ struct MedicineScheduleCard: View {
 
             // Status
             if entry.isNext {
-                // Prototype: Pill tone="insights"
                 Text("NEXT")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white)

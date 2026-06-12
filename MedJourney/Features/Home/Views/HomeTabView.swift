@@ -19,13 +19,12 @@ struct HomeTabView: View {
 
     @State private var viewModel: HomeViewModel
 
-    /// Default init used by the app.
     init() {
         self._viewModel = State(initialValue: HomeViewModel())
     }
 
-    /// Preview init — lets `#Preview` inject a pre-configured ViewModel
-    /// so AI states are visible in the canvas without a real device.
+    /// Lets `#Preview` inject a pre-configured ViewModel so AI states are
+    /// visible in the canvas without a real device.
     init(previewViewModel: HomeViewModel) {
         self._viewModel = State(initialValue: previewViewModel)
     }
@@ -98,7 +97,7 @@ struct HomeTabView: View {
             .background(AppColors.background)
             .navigationBarHidden(true)
             .onAppear {
-                resetChecklistIfNeeded()
+                viewModel.resetChecklistIfNeeded(items: checklistItems)
                 viewModel.loadWelcomeInsight(entries: allEntries, anomalies: vitalsAnomalies)
             }
             .sheet(isPresented: $showMoodSheet) {
@@ -235,8 +234,6 @@ struct HomeTabView: View {
             showMoodSheet = true
         } label: {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
-
-                // Title row — prototype: serif "How are you feeling?" + heart icon
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("How are you feeling?")
@@ -313,7 +310,7 @@ struct HomeTabView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(AppColors.error)
-                Text("Anomali Detected")
+                Text("Anomaly Detected")
                     .appFont(.bodySemibold)
                     .foregroundStyle(AppColors.error)
                 Spacer()
@@ -375,25 +372,6 @@ struct HomeTabView: View {
         .aiGlow(cornerRadius: AppRadius.xl)
     }
 
-    // MARK: - Checklist Reset
-
-    private func resetChecklistIfNeeded() {
-        guard !checklistItems.isEmpty else { return }
-        let lastReset = UserDefaults.standard.object(forKey: "checklistLastReset") as? Date
-
-        if lastReset == nil || !Calendar.current.isDateInToday(lastReset!) {
-            let completed = checklistItems.filter(\.isChecked).count
-            ChecklistHistoryStore.shared.recordToday(
-                total: checklistItems.count,
-                completed: completed
-            )
-            if completed > 0 {
-                UserDefaults.standard.set(Date(), forKey: "checklistLastSaved")
-            }
-            for item in checklistItems { item.isChecked = false }
-            UserDefaults.standard.set(Date(), forKey: "checklistLastReset")
-        }
-    }
 }
 
 // MARK: - Previews

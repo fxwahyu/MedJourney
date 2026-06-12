@@ -43,7 +43,7 @@ struct MedicineTabView: View {
         }
     }
 
-    // MARK: - Header (flat)
+    // MARK: - Header
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -82,17 +82,12 @@ struct MedicineTabView: View {
         .padding(.horizontal, AppSpacing.xxl)
         .padding(.bottom, AppSpacing.xl)
         .background {
-            ZStack {
-                LinearGradient(
-                    colors: [AppColors.rose.opacity(0.4), Color.clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea(edges: .top)
-//                Rectangle()
-//                    .fill(.ultraThinMaterial)
-//                    .ignoresSafeArea(edges: .top)
-            }
+            LinearGradient(
+                colors: [AppColors.rose.opacity(0.4), Color.clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .top)
         }
         .overlay(alignment: .bottom) {
             Divider().opacity(0.25)

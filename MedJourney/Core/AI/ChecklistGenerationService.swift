@@ -1,17 +1,23 @@
+//
+//  ChecklistGenerationService.swift
+//  MedJourney
+//
+
 import Foundation
 
+/// One suggested daily habit, as returned by the LLM.
 struct ChecklistGenerationItem: Codable {
     let emoji: String
     let text: String
 }
 
-/// Generates a daily wellness checklist + tag-insight phrasing from checkup data.
-/// All LLM calls route through `LLMGateway` (Groq → Gemini fallback); this service
-/// holds no API key of its own.
+/// Generates the daily wellness checklist from checkup results, plus a cloud
+/// fallback for phrasing tag statistics when Apple Intelligence is unavailable.
 final class ChecklistGenerationService {
 
     init() {}
 
+    /// Suggests up to 5 supportive daily habits from a checkup's OCR text and doctor notes.
     func generateChecklist(ocrText: String, notes: String) async throws -> [ChecklistGenerationItem] {
         let prompt = """
         You are MedCare AI, a warm health companion. Based on this medical checkup result and doctor notes, suggest up to 5 supportive daily health habits for this patient.
@@ -42,36 +48,17 @@ final class ChecklistGenerationService {
         \(notes.isEmpty ? "(none)" : notes)
         """
 
-        let responseText = try await callGemini(prompt: prompt, jsonMode: true)
+        let response = try await LLMGateway.shared.complete(prompt: prompt, jsonMode: true)
 
-        guard
-            let arrayData = responseText.data(using: .utf8),
-            let items = try? JSONDecoder().decode([ChecklistGenerationItem].self, from: arrayData)
-        else {
+        guard let data = response.data(using: .utf8),
+              let items = try? JSONDecoder().decode([ChecklistGenerationItem].self, from: data) else {
             return []
         }
-
         return Array(items.prefix(5))
     }
 
-    // NOTE: generateHealthSummaryFromStats(_:) — the Insights "Deep AI Summary"
-    // call that bundled fresh local stats into a Gemini prompt — has been removed.
-    // That responsibility is now powered by the curated `health_summary.md`
-    // knowledge base via `LLMAnalysisService.generateHealthInsights`, wired up
-    // from `InsightsViewModel.generateDeepSummary()`. See README_AI_PIPELINE.md.
-
-    // MARK: - On-Device Fallbacks (called when Foundation Models is unavailable)
-    //
-    // NOTE: generateWelcomeMessage(...) — the Home daily-briefing fallback that
-    // bundled fresh local context (recent tags, anomalies, checklist rate, days
-    // since last entry) into a Gemini prompt — has been removed. That
-    // responsibility is now powered by the curated `health_summary.md` "Daily
-    // Summary Context" slice via `DailySummaryService.generateGreeting()`,
-    // wired up from `HomeViewModel.loadWelcomeInsight`. See README_AI_PIPELINE.md.
-
-    /// Gemini fallback for phrasing tag frequency insight.
-    ///
-    /// Called only when Apple Intelligence is not available on the device.
+    /// Cloud fallback for phrasing tag-frequency stats — used only when
+    /// `FoundationModelsService` is unavailable on the device.
     func phraseTagInsight(tagCounts: [String: Int], periodLabel: String) async throws -> String {
         let top = tagCounts
             .sorted { $0.value > $1.value }
@@ -94,19 +81,8 @@ final class ChecklistGenerationService {
 
         Write only the insight sentences, nothing else.
         """
-        let result = try await callGemini(prompt: prompt, jsonMode: false)
+
+        let result = try await LLMGateway.shared.complete(prompt: prompt, jsonMode: false)
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    // MARK: - Private
-
-    /// Routes through the app-wide `LLMGateway` — no direct provider calls.
-    /// Provider/model/fallback order is decided entirely inside `LLMGateway`.
-    private func callGemini(prompt: String, jsonMode: Bool) async throws -> String {
-        do {
-            return try await LLMGateway.shared.complete(prompt: prompt, jsonMode: jsonMode)
-        } catch let error as LLMGatewayError {
-            throw error.asAITagError
-        }
     }
 }

@@ -2,12 +2,6 @@
 //  DailyGreeting.swift
 //  MedJourney
 //
-//  Models/AI — The warm home-screen greeting card payload.
-//
-//  Produced by LLMAnalysisService.generateDailyGreeting(summaryContext:) using
-//  only the "Daily Summary Context" slice of health_summary.md, and cached for
-//  the day by DailySummaryService.
-//
 
 import Foundation
 

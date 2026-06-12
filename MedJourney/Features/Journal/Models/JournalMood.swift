@@ -71,11 +71,4 @@ enum JournalMood: String, CaseIterable, Identifiable {
         case .pain:    return Color(hex: "FF3333").opacity(0.4)
         }
     }
-
-    var showsPainSlider: Bool {
-        switch self {
-        case .great, .good: return false
-        default: return true
-        }
-    }
 }

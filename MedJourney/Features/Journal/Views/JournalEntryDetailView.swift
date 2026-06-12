@@ -2,18 +2,16 @@
 //  JournalEntryDetailView.swift
 //  MedJourney
 //
-//  Feature: Journal — Read-only detail sheet matching the Vital Calm "EntryDetail" prototype.
-//
 
 import SwiftUI
 
+/// Read-only detail sheet for a saved journal entry.
 struct JournalEntryDetailView: View {
 
     let entry: JournalEntry
     @Environment(\.dismiss) private var dismiss
 
-    @State private var isGeneratingTags = false
-    private let tagService = LLMTagService()
+    @State private var viewModel = JournalEntryDetailViewModel()
 
     // MARK: - Body
 
@@ -47,7 +45,6 @@ struct JournalEntryDetailView: View {
 
     private var entryHeader: some View {
         HStack(spacing: AppSpacing.md) {
-            // 52px rounded tile — prototype: width 52, borderRadius 16, category pale
             ZStack {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(typePaleColor)
@@ -63,13 +60,11 @@ struct JournalEntryDetailView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                // Serif title — prototype: fontSize 20 fontWeight 600
                 Text(entry.title)
                     .styled(.h2)
                     .foregroundStyle(AppColors.textPrimary)
                     .lineLimit(2)
 
-                // Date — prototype: fontSize 12.5 ink-3
                 Text(entry.createdAt.formatted(date: .long, time: .shortened))
                     .appFont(.caption)
                     .foregroundStyle(AppColors.textTertiary)
@@ -128,7 +123,6 @@ struct JournalEntryDetailView: View {
 
     private func vitalCell(icon: String, label: String, value: String, unit: String) -> some View {
         HStack(spacing: AppSpacing.sm) {
-            // 36px brandPale tile — prototype
             ZStack {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(AppColors.brandPale)
@@ -138,7 +132,6 @@ struct JournalEntryDetailView: View {
                     .foregroundStyle(AppColors.brand)
             }
             VStack(alignment: .leading, spacing: 2) {
-                // Mono value — prototype: className="mono" fontSize 16
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(value)
                         .font(.custom("DMMono-Medium", size: 16))
@@ -171,10 +164,10 @@ struct JournalEntryDetailView: View {
                 FlowLayout(tags: entry.aiTags, color: tagColor, bgColor: tagBgColor)
             }
         } else if entry.entryType == .checkup {
-            // Generate button for unanalyzed checkups
-            Button { generateTags() } label: {
+            // Unanalyzed checkup — offer on-demand analysis.
+            Button { viewModel.generateTags(for: entry) } label: {
                 HStack(spacing: AppSpacing.sm) {
-                    if isGeneratingTags {
+                    if viewModel.isGeneratingTags {
                         AIOrbitLoader(size: 28)
                         Text("Analyzing…")
                             .appFont(.bodySemibold)
@@ -206,11 +199,11 @@ struct JournalEntryDetailView: View {
                 .background(AppColors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
             }
-            .disabled(isGeneratingTags)
+            .disabled(viewModel.isGeneratingTags)
             .buttonStyle(ScaleButtonStyle())
             .aiGlow(cornerRadius: AppRadius.md)
         } else {
-            // Journal tags generating shimmer
+            // Journal tags still generating in the background — skeleton pills.
             HStack(spacing: AppSpacing.xs) {
                 skeletonPill(60); skeletonPill(80); skeletonPill(55)
             }
@@ -223,29 +216,7 @@ struct JournalEntryDetailView: View {
             .frame(width: w, height: 26)
     }
 
-    private func generateTags() {
-        isGeneratingTags = true
-        Task.detached(priority: .userInitiated) {
-            var ocrText: String? = nil
-            if let imagesData = entry.attachedImagesData {
-                let images = imagesData.compactMap { UIImage(data: $0) }
-                ocrText = try? await DocumentScannerService().extractText(from: images)
-            }
-            guard let result = try? await tagService.generateTags(for: entry, ocrText: ocrText),
-                  !result.tags.isEmpty else {
-                await MainActor.run { isGeneratingTags = false }
-                return
-            }
-            await MainActor.run {
-                entry.aiTags    = result.tags
-                entry.aiAnalysis = result.analysis
-                entry.updatedAt  = Date()
-                isGeneratingTags = false
-            }
-        }
-    }
-
-    // MARK: - AI Analysis aurora card
+    // MARK: - AI Analysis Card
 
     private func aiAnalysisCard(_ analysis: String) -> some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {

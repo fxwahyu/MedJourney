@@ -19,7 +19,6 @@ struct AddContentSheet: View {
             // Drag indicator gap
             Spacer().frame(height: AppSpacing.xs)
 
-            // Serif title — prototype: `className="serif" fontSize 21 fontWeight 500`
             Text("What would you like to log?")
                 .styled(.h2)
                 .foregroundStyle(AppColors.textPrimary)
@@ -78,7 +77,6 @@ struct AddContentSheet: View {
     ) -> some View {
         Button(action: action) {
             HStack(spacing: AppSpacing.lg) {
-                // 52px tile — wash at 14% on white surface (≈ prototype `color-mix(in srgb, wash 14%, #fff)`)
                 ZStack {
                     RoundedRectangle(cornerRadius: 16)
                         .fill(wash.opacity(0.14))

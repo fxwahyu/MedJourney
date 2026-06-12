@@ -175,28 +175,6 @@ struct AISparkleTag: View {
     }
 }
 
-// MARK: - On-Device Privacy Pill
-
-/// Lock pill reinforcing that processing happens on-device (Foundation Models).
-struct OnDevicePill: View {
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 8, weight: .semibold))
-            Text("On-device")
-                .font(.system(size: 9, weight: .semibold))
-        }
-        .foregroundStyle(AppColors.accentViolet)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(AppColors.accentVioletPale)
-        .clipShape(Capsule())
-        .overlay {
-            Capsule().stroke(AppColors.accentViolet.opacity(0.2), lineWidth: 1)
-        }
-    }
-}
-
 // MARK: - Floating Sparkle Decoration
 
 struct FloatingSparkles: View {
@@ -378,10 +356,7 @@ struct MarkdownAnalysisView: View {
 
             AILoadingBanner(message: "Analyzing your health documents...")
 
-            HStack(spacing: AppSpacing.sm) {
-                AISparkleTag()
-                OnDevicePill()
-            }
+            AISparkleTag()
 
             Text("AI Powered Card")
                 .appFont(.bodySemibold)

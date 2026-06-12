@@ -11,11 +11,6 @@ struct JournalMoodSheet: View {
     @State private var viewModel = JournalEntryViewModel()
     @State private var showVitals = false
 
-    // Local data for journal prompt context
-    @Query(sort: \JournalEntry.createdAt, order: .reverse) private var recentEntries: [JournalEntry]
-    @Query(sort: \ChecklistItem.sortOrder) private var checklistItems: [ChecklistItem]
-    @Query(filter: #Predicate<Medicine> { $0.isActive }) private var activeMedicines: [Medicine]
-
     var body: some View {
         @Bindable var vm = viewModel
         NavigationStack {
@@ -53,16 +48,10 @@ struct JournalMoodSheet: View {
             }
         }
         .onAppear {
-            viewModel.entryType = .journal
             if let mood = preselectedMood {
                 viewModel.selectedMood = mood
             }
-            // Generate contextual journal prompt on-device (zero Gemini tokens)
-            viewModel.loadJournalPrompt(
-                entries: Array(recentEntries.prefix(20)),
-                checklistItems: checklistItems,
-                medicines: activeMedicines
-            )
+            viewModel.loadJournalPrompt()
         }
     }
 
@@ -127,16 +116,12 @@ struct JournalMoodSheet: View {
         .buttonStyle(ScaleButtonStyle())
     }
 
-    // MARK: - Journal Opening Prompt (Foundation Models on-device)
-
-    // MARK: - Journal Opening Prompt (reused from Home AI briefing)
-    // Prototype: ai-tint bg (--ai-tint = accentVioletPale), sparkles icon in ai-1 (accentViolet)
+    // MARK: - Journal Opening Prompt (reused from the Home AI briefing)
 
     @ViewBuilder
     private var journalPromptHint: some View {
         if viewModel.isLoadingPrompt {
             HStack(spacing: AppSpacing.sm) {
-                // Spinner — prototype: `<Spinner color="var(--ai-2)" size={12} />`
                 ProgressView()
                     .scaleEffect(0.75)
                     .tint(AppColors.sky)
@@ -151,7 +136,6 @@ struct JournalMoodSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
             .transition(.opacity)
         } else if let prompt = viewModel.journalOpeningPrompt {
-            // Prototype: sparkles icon (ai-1 = accentViolet) + typed-on text
             HStack(alignment: .top, spacing: AppSpacing.sm) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 14, weight: .semibold))

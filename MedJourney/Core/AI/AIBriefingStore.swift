@@ -2,19 +2,16 @@
 //  AIBriefingStore.swift
 //  MedJourney
 //
-//  Shared singleton that holds the AI daily briefing message generated on the Home screen.
-//  The Journal mood sheet reads from here instead of generating a separate prompt,
-//  so the user sees a consistent message across both surfaces.
-//
 
 import Foundation
 
+/// Holds the daily briefing generated on the Home screen so the Journal mood
+/// sheet can reuse it — one generation, consistent message across both surfaces.
 @Observable
 final class AIBriefingStore {
     static let shared = AIBriefingStore()
     private init() {}
 
-    /// The briefing message last generated for the current session.
-    /// `nil` means not yet ready — callers should show a loading state or placeholder.
-    var message: String? = nil
+    /// `nil` until the Home screen finishes generating the briefing.
+    var message: String?
 }

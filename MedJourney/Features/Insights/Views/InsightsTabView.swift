@@ -29,9 +29,6 @@ struct InsightsTabView: View {
                             anomalyBannerCard
                         }
                         tagFrequencyCard
-//                        if !viewModel.medicationCorrelations.isEmpty {
-//                            medicationCorrelationCard
-//                        }
                         aiSummaryCard
                         exportRow
                     }
@@ -56,12 +53,12 @@ struct InsightsTabView: View {
 
     /// Full load on first appear — includes requesting the AI phrase insight.
     private func initialLoad() {
-        viewModel.loadData(from: entries, checklistItems: checklistItems, medicines: activeMedicines)
+        viewModel.loadData(from: entries, checklistItems: checklistItems)
     }
 
     /// Lightweight refresh when data changes mid-session — charts only, no AI call.
     private func refreshData() {
-        viewModel.refreshData(from: entries, checklistItems: checklistItems, medicines: activeMedicines)
+        viewModel.refreshData(from: entries, checklistItems: checklistItems)
     }
 
     // MARK: - Header
@@ -385,7 +382,7 @@ struct InsightsTabView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(AppColors.error)
-                Text("Anomali Detected")
+                Text("Anomaly Detected")
                     .appFont(.bodySemibold)
                     .foregroundStyle(AppColors.error)
                 Spacer()
@@ -539,61 +536,6 @@ struct InsightsTabView: View {
         .background(AppColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.xl))
         .shadow(color: AppColors.accentViolet.opacity(0.1), radius: 12, x: 0, y: 4)
-    }
-
-    // MARK: - Medication Correlation Card
-
-    private var medicationCorrelationCard: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.lg) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Medication Impact")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(AppColors.textPrimary)
-                    Text("Symptom count before vs. after starting")
-                        .font(.system(size: 12))
-                        .foregroundStyle(AppColors.textTertiary)
-                }
-                Spacer()
-            }
-
-            VStack(spacing: AppSpacing.md) {
-                ForEach(viewModel.medicationCorrelations) { correlation in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(correlation.medicationName)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(AppColors.textPrimary)
-                            Text("Since \(correlation.startDate.formatted(date: .abbreviated, time: .omitted))")
-                                .font(.system(size: 11))
-                                .foregroundStyle(AppColors.textTertiary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text(correlation.trendLabel)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(correlation.trendColor)
-                            if let pct = correlation.changePercent {
-                                Text("\(pct > 0 ? "+" : "")\(Int(pct))% symptoms")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(AppColors.textTertiary)
-                            }
-                        }
-                    }
-                    .padding(AppSpacing.md)
-                    .background(AppColors.surface2)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
-                }
-            }
-        }
-        .padding(AppSpacing.xl)
-        .background(AppColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.xl))
-        .overlay {
-            RoundedRectangle(cornerRadius: AppRadius.xl)
-                .stroke(AppColors.border, lineWidth: 1)
-        }
-        .shadow(color: Color.black.opacity(0.04), radius: 12, x: 0, y: 4)
     }
 
     // MARK: - AI Summary Card

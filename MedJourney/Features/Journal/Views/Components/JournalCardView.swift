@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Journal entry card matching the Vital Calm prototype `EntryCard` layout:
-/// leading 38pt rounded tile + title/meta + optional vitals row + tag pills.
+/// Journal entry card: leading category tile + title/meta + optional vitals row + tag pills.
 struct JournalCardView: View {
     let entry: JournalEntry
 

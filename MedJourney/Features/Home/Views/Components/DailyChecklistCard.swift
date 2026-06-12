@@ -31,7 +31,6 @@ struct DailyChecklistCard: View {
                 Text("Today's health goals")
                     .appFont(.bodySemibold)
                     .foregroundStyle(AppColors.textPrimary)
-                // Prototype: subtitle has "AI-built" in aurora text
                 HStack(spacing: 4) {
                     Text(isDone ? "All done — beautiful work 🎉" : "\(checkedCount) of \(items.count) complete")
                         .appFont(.caption)

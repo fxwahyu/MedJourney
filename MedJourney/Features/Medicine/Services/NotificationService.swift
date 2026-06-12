@@ -112,15 +112,12 @@ extension NotificationService: UNUserNotificationCenterDelegate {
 
         switch response.actionIdentifier {
         case Self.takenAction:
-            print("💊 [NotificationService] '\(name)' marked as taken")
-            // Post notification so the app can log the dose if it's in the foreground
             NotificationCenter.default.post(
                 name: .doseTaken,
                 object: nil,
                 userInfo: ["medicineName": name, "medicineID": info["medicineID"] ?? ""]
             )
         case Self.skipAction:
-            print("💊 [NotificationService] '\(name)' dose skipped")
             NotificationCenter.default.post(
                 name: .doseSkipped,
                 object: nil,
