@@ -2,18 +2,6 @@
 //  VitalsAnomalyDetector.swift
 //  MedJourney
 //
-//  Core/AI — On-device vitals anomaly detection
-//
-//  On-device vitals anomaly detection using rolling mean + standard deviation.
-//  Pure Swift math only — no Core ML model file, no external dependency.
-//
-//  Logic:
-//  - Requires a minimum of 7 data points before flagging anything
-//  - Flags when current reading deviates ≥2 standard deviations from
-//    the user's personal rolling mean (NOT global medical ranges)
-//  - Tracks consecutive readings in the same direction for richer messaging
-//  - Applies to: systolic BP, diastolic BP, heart rate, temperature, weight
-//
 
 import Foundation
 
@@ -55,13 +43,12 @@ struct VitalsAnomaly: Identifiable {
 
 // MARK: - Detector
 
-/// Detects personal vitals anomalies using rolling mean + standard deviation.
+/// On-device vitals anomaly detection — pure Swift, no ML model.
 ///
-/// On-device vitals anomaly detection — pure Swift, no ML model needed.
-///
-/// Comparing against the user's own baseline (not clinical ranges) means
-/// the detector personalises to each individual's normal, catching relative
-/// changes that generic thresholds would miss.
+/// Compares readings against the user's own rolling mean (not clinical ranges),
+/// so the detector personalises to each individual's normal and catches relative
+/// changes that generic thresholds would miss. Applies to systolic/diastolic BP,
+/// heart rate, temperature, and weight.
 enum VitalsAnomalyDetector {
 
     /// Minimum readings required before the detector activates.

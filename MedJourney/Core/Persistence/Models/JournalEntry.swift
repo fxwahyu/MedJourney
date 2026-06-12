@@ -8,67 +8,49 @@
 import Foundation
 import SwiftData
 
-/// Represents a single health journal entry stored locally via SwiftData.
-///
-/// Supports three entry types matching the MedJourney design:
-/// - **symptom**: User describes how they feel + discomfort level
-/// - **checkup**: Medical checkup data and lab results
-/// - **medication**: Medication name, dosage, and timing
-///
-/// This model is registered in `SwiftDataContainer` and accessed
-/// via `JournalEntryRepository`.
+/// A single health record: a mood journal, a medical checkup, or a medication log.
 @Model
 final class JournalEntry {
 
     // MARK: - Properties
 
-    /// Unique identifier for the entry
     @Attribute(.unique)
     var id: UUID
 
-    /// Short title summarizing the entry
     var title: String
-
-    /// Full content / description of the entry
     var content: String
-
-    /// The type of journal entry
     var entryTypeRaw: String
 
-    /// Discomfort level on a 1-10 scale (nil if not applicable)
+    /// Discomfort level on a 1-10 scale (nil if not applicable).
     var discomfortLevel: Int?
 
-    /// Blood pressure reading (e.g., "120/80")
+    /// Blood pressure reading, e.g. "120/80".
     var bloodPressure: String?
 
-    /// Heart rate in BPM
+    /// Heart rate in BPM.
     var heartRate: Int?
 
-    /// Body temperature in Celsius
+    /// Body temperature in °C.
     var temperature: Double?
 
-    /// Body weight in kilograms
+    /// Body weight in kg.
     var weight: Double?
 
-    /// When the entry was created
     var createdAt: Date
-
-    /// When the entry was last modified
     var updatedAt: Date
 
-    /// Comma-separated AI-generated tags (nil = not yet generated)
+    /// Comma-separated AI-generated tags (nil = not yet generated).
     var aiTagsRaw: String?
 
-    /// Detailed AI Markdown analysis for checkups
+    /// Structured AI markdown analysis (checkups only).
     var aiAnalysis: String?
 
-    /// Uploaded document images, stored efficiently outside the SQLite DB
+    /// Uploaded document images, stored outside the SQLite DB.
     @Attribute(.externalStorage)
     var attachedImagesData: [Data]?
 
     // MARK: - Computed Properties
 
-    /// Parsed AI tags array
     var aiTags: [String] {
         get {
             aiTagsRaw?.split(separator: ",")
@@ -80,7 +62,7 @@ final class JournalEntry {
         }
     }
 
-    /// Type-safe access to the entry type
+    /// Type-safe access to the entry type.
     var entryType: EntryType {
         get { EntryType(rawValue: entryTypeRaw) ?? .journal }
         set { entryTypeRaw = newValue.rawValue }
@@ -88,38 +70,18 @@ final class JournalEntry {
 
     // MARK: - Entry Type
 
-    /// The category of a journal entry.
     enum EntryType: String, Codable, CaseIterable, Identifiable {
-        case journal = "journal"
-        case checkup = "checkup"
-        case medication = "medication"
+        case journal
+        case checkup
+        case medication
 
         var id: String { rawValue }
 
-        /// Display name for UI
         var displayName: String {
             switch self {
             case .journal: return "Journaling"
             case .checkup: return "Medical Analysis"
             case .medication: return "Medication"
-            }
-        }
-
-        /// SF Symbol icon name
-        var iconName: String {
-            switch self {
-            case .journal: return "heart.text.square"
-            case .checkup: return "sparkles"
-            case .medication: return "pills"
-            }
-        }
-
-        /// Emoji prefix for display
-        var emoji: String {
-            switch self {
-            case .journal: return "✍️"
-            case .checkup: return "📋"
-            case .medication: return "💊"
             }
         }
     }

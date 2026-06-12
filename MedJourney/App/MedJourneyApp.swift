@@ -2,8 +2,6 @@
 //  MedJourneyApp.swift
 //  MedJourney
 //
-//  Created by user on 19/05/26.
-//
 
 import SwiftUI
 import SwiftData
@@ -14,11 +12,12 @@ struct MedJourneyApp: App {
     let modelContainer: ModelContainer
 
     init() {
-        // Initialize SwiftData container
         modelContainer = SwiftDataContainer.create()
+//        SeedDataManager.seedIfNeeded(context: modelContainer.mainContext)
 
-        // Seed demo data on first launch
-        SeedDataManager.seedIfNeeded(context: modelContainer.mainContext)
+        // Touch the singleton at launch so its notification-center delegate is
+        // registered before any reminder fires.
+        _ = NotificationService.shared
     }
 
     var body: some Scene {
@@ -34,7 +33,7 @@ struct RootView: View {
 
     var body: some View {
         if hasOnboarded {
-            ContentView()
+            MainTabView()
         } else {
             OnboardingView()
         }

@@ -2,8 +2,6 @@
 //  DocumentScannerService.swift
 //  MedJourney
 //
-//  Core/Services — Extracts text from images and PDFs using Apple's Vision framework
-//
 
 import UIKit
 import Vision
@@ -13,55 +11,32 @@ enum DocumentScannerError: Error {
     case recognitionFailed(Error)
 }
 
-/// A service to perform on-device OCR (Optical Character Recognition) on uploaded medical documents.
-/// Uses Apple's native Vision framework to ensure data privacy and fast execution.
+/// On-device OCR for uploaded medical documents, using Apple's Vision framework.
 final class DocumentScannerService {
-    
-    /// Extracts text from an array of UIImages.
-    /// - Parameter images: The images to scan.
-    /// - Returns: A concatenated string of all recognized text.
+
+    /// Extracts recognized text from the images, concatenated in order.
     func extractText(from images: [UIImage]) async throws -> String {
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
+            // Vision is synchronous and CPU heavy — run off the calling thread.
             DispatchQueue.global(qos: .userInitiated).async {
                 var fullText = ""
-                
+
                 for image in images {
-                    guard let cgImage = image.cgImage else {
-                        continue
-                    }
-                    
-                    let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                    guard let cgImage = image.cgImage else { continue }
+
                     let request = VNRecognizeTextRequest { request, error in
-                        if let error = error {
-                            print("OCR Error: \(error.localizedDescription)")
-                            return
-                        }
-                        
-                        guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                            return
-                        }
-                        
-                        let recognizedStrings = observations.compactMap { observation in
-                            // Return the top candidate
-                            observation.topCandidates(1).first?.string
-                        }
-                        
-                        fullText += recognizedStrings.joined(separator: "\n")
-                        fullText += "\n\n"
+                        guard error == nil,
+                              let observations = request.results as? [VNRecognizedTextObservation] else { return }
+                        let strings = observations.compactMap { $0.topCandidates(1).first?.string }
+                        fullText += strings.joined(separator: "\n") + "\n\n"
                     }
-                    
-                    // Optimize for accurate text recognition (vs fast)
                     request.recognitionLevel = .accurate
-                    // Enable language correction
                     request.usesLanguageCorrection = true
-                    
-                    do {
-                        try requestHandler.perform([request])
-                    } catch {
-                        print("Failed to perform OCR on image: \(error.localizedDescription)")
-                    }
+
+                    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                    try? handler.perform([request])
                 }
-                
+
                 continuation.resume(returning: fullText.trimmingCharacters(in: .whitespacesAndNewlines))
             }
         }

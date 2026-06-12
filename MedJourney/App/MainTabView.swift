@@ -1,7 +1,14 @@
+//
+//  MainTabView.swift
+//  MedJourney
+//
+
 import SwiftUI
 import SwiftData
 
-struct ContentView: View {
+/// The five-tab root of the app. The center "+" tab is a fake tab that opens
+/// the add-content sheet instead of switching views.
+struct MainTabView: View {
 
     @State private var selectedTab = 0
     @State private var showAddContent = false
@@ -98,6 +105,6 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    MainTabView()
         .modelContainer(SwiftDataContainer.create(inMemory: true))
 }

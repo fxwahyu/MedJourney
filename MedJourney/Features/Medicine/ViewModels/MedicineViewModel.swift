@@ -1,6 +1,12 @@
+//
+//  MedicineViewModel.swift
+//  MedJourney
+//
+
 import SwiftUI
 import SwiftData
 
+/// Form state and actions for adding and managing medicines.
 @Observable
 final class MedicineViewModel {
 
@@ -11,11 +17,7 @@ final class MedicineViewModel {
     var notes: String = ""
     var notificationTimes: [String] = []
 
-    // Legacy Date-based picker (kept for compat)
-    var newTime: Date = Calendar.current.date(bySettingHour: 8, minute: 0, second: 0, of: Date()) ?? Date()
     var showTimePicker = false
-
-    // Custom wheel picker state
     var pickerHour: Int = 8
     var pickerMinute: Int = 0
 
@@ -37,16 +39,11 @@ final class MedicineViewModel {
     }
 
     func saveMedicine(context: ModelContext) {
-        // Combine dose into notes if dose is filled
-        let combinedNotes: String
-        if dose.trimmingCharacters(in: .whitespaces).isEmpty {
-            combinedNotes = notes.trimmingCharacters(in: .whitespaces)
-        } else {
-            let notesText = notes.trimmingCharacters(in: .whitespaces)
-            combinedNotes = notesText.isEmpty
-                ? dose.trimmingCharacters(in: .whitespaces)
-                : "\(dose.trimmingCharacters(in: .whitespaces)) — \(notesText)"
-        }
+        let trimmedDose = dose.trimmingCharacters(in: .whitespaces)
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespaces)
+        let combinedNotes = [trimmedDose, trimmedNotes]
+            .filter { !$0.isEmpty }
+            .joined(separator: " — ")
 
         let medicine = Medicine(
             name: name.trimmingCharacters(in: .whitespaces),
@@ -55,9 +52,9 @@ final class MedicineViewModel {
             isActive: true
         )
         context.insert(medicine)
+
         Task {
-            let granted = await NotificationService.shared.requestPermission()
-            if granted {
+            if await NotificationService.shared.requestPermission() {
                 NotificationService.shared.scheduleMedicineReminders(for: medicine)
             }
         }
@@ -71,19 +68,11 @@ final class MedicineViewModel {
     func toggleActive(_ medicine: Medicine) {
         withAnimation {
             medicine.isActive.toggle()
-            medicine.updatedAt = Date()
         }
         if medicine.isActive {
             NotificationService.shared.scheduleMedicineReminders(for: medicine)
         } else {
             NotificationService.shared.cancelMedicineReminders(for: medicine)
         }
-    }
-}
-
-extension Medicine {
-    var updatedAt: Date {
-        get { startDate }
-        set { startDate = newValue }
     }
 }

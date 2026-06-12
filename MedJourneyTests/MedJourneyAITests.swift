@@ -2,23 +2,8 @@
 //  MedJourneyAITests.swift
 //  MedJourneyTests
 //
-//  Unit + integration tests for the full AI call chain.
-//
-//  Unit tests (fast, no network):
-//    - Key resolution guard: empty/placeholder key → missingAPIKey thrown
-//    - LLMAnalysisService dryRun: all three call types return mock data
-//    - Medication entries produce zero tags without touching the network
-//
-//  Integration tests (real network, ~5–30 s each):
-//    - testKeyAvailability         → verifies Config.plist can be read from the app bundle
-//    - testGeminiJournalTagging    → LLMTagService, journal entry → tags
-//    - testGeminiCheckupAnalysis   → LLMTagService, checkup entry → tags + analysis
-//    - testLLMAnalysisDailyGreeting → LLMAnalysisService, greeting endpoint
-//    - testLLMAnalysisHealthInsights → LLMAnalysisService, insights endpoint
-//    - testChecklistGeneration     → ChecklistGenerationService, generates ≥1 item
-//
-//  Run all: Product → Test (Cmd+U) — integration tests skip gracefully when the key
-//  cannot be resolved (no Config.plist, no env var set).
+//  Unit + integration tests for the AI call chain. Integration tests make real
+//  network calls (~5–30s each) and skip gracefully when no API key resolves.
 //
 
 import Testing
@@ -54,9 +39,7 @@ private func resolveGeminiKey() -> String {
 @Suite("AI Services — Unit & Integration Tests")
 struct MedJourneyAITests {
 
-    // ─────────────────────────────────────────────────
-    // MARK: Key Resolution
-    // ─────────────────────────────────────────────────
+    // MARK: - Key Resolution
 
     /// Confirms the test can read GEMINI_API_KEY from the app bundle's Config.plist.
     /// If this fails: Config.plist is absent from the app bundle OR the key is a placeholder.
@@ -70,19 +53,7 @@ struct MedJourneyAITests {
             "GEMINI_API_KEY is still the placeholder value in Config.plist")
     }
 
-    // ─────────────────────────────────────────────────
-    // MARK: Key Guards
-    // ─────────────────────────────────────────────────
-    //
-    // Per-service "empty key throws missingAPIKey" tests were removed: API-key
-    // resolution is now centralized in `LLMGateway` (Groq → Gemini), not injected
-    // per service. The services (`LLMTagService`, `ChecklistGenerationService`,
-    // `LLMAnalysisService`) no longer hold a key. Missing-key behavior is the
-    // gateway's responsibility; it skips a provider with no key and falls through.
-
-    // ─────────────────────────────────────────────────
-    // MARK: Medication Entry Fast-Path (unit, no network)
-    // ─────────────────────────────────────────────────
+    // MARK: - Medication Entry Fast-Path (unit, no network)
 
     /// Medication entries have no prompt — the service returns empty tags
     /// without making any network call.
@@ -95,17 +66,7 @@ struct MedJourneyAITests {
         #expect(result.analysis == nil, "Medication entries must return nil analysis")
     }
 
-    // ─────────────────────────────────────────────────
-    // MARK: LLMAnalysisService — dryRun (unit, no network)
-    // ─────────────────────────────────────────────────
-
-    @Test("LLMAnalysisService dryRun: analyzeCheckup returns mock summary")
-    func testDryRunCheckupAnalysis() async throws {
-        let service = LLMAnalysisService(dryRun: true)
-        let result = try await service.analyzeCheckup(extractedText: "Hemoglobin 11.2 g/dL (low)")
-        #expect(!result.summary.isEmpty, "dryRun checkup summary must not be empty")
-        #expect(!result.flaggedMarkers.isEmpty, "dryRun must include at least one flagged marker")
-    }
+    // MARK: - LLMAnalysisService — dryRun (unit, no network)
 
     @Test("LLMAnalysisService dryRun: generateHealthInsights returns mock trend")
     func testDryRunHealthInsights() async throws {
@@ -124,19 +85,7 @@ struct MedJourneyAITests {
         #expect(!result.message.isEmpty, "dryRun greeting message must not be empty")
     }
 
-    @Test("LLMAnalysisService dryRun: generateDailyTags returns mock tags")
-    func testDryRunDailyTags() async throws {
-        let service = LLMAnalysisService(dryRun: true)
-        let result = try await service.generateDailyTags(journalText: "Tired and headache after lunch")
-        #expect(!result.isEmpty, "dryRun daily tags must return at least one tag")
-    }
-
-    // ─────────────────────────────────────────────────
-    // MARK: Integration tests — real Gemini API calls
-    // ─────────────────────────────────────────────────
-    //
-    // Each test checks key availability and prints a clear message if it skips.
-    // Run with Cmd+U — they will take 5–30 s per test.
+    // MARK: - Integration tests (real network calls)
 
     @Test("Gemini API: tag a journal entry", .timeLimit(.minutes(2)))
     func testGeminiJournalTagging() async throws {

@@ -2,11 +2,6 @@
 //  HealthInsights.swift
 //  MedJourney
 //
-//  Models/AI — Output of a trend-summary / Health Insights generation.
-//
-//  Built from health_summary.md only (never raw entries) by
-//  LLMAnalysisService.generateHealthInsights(summary:timeRange:).
-//
 
 import Foundation
 

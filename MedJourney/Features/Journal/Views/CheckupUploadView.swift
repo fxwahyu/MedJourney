@@ -62,7 +62,6 @@ struct CheckupUploadView: View {
     // MARK: - Hero
 
     private var heroHeader: some View {
-        // Prototype: gradient card teal→brand-strong, FloatingSparkles, serif title + subtitle + tag
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: AppRadius.lg)
                 .fill(LinearGradient(

@@ -1,9 +1,20 @@
+//
+//  CheckupViewModel.swift
+//  MedJourney
+//
+
 import SwiftUI
 import SwiftData
 import PhotosUI
 import PDFKit
 import UniformTypeIdentifiers
 
+/// State and business logic for uploading and analyzing a medical checkup.
+///
+/// Saving returns immediately; OCR, tag generation, the curated-summary update,
+/// and daily-checklist generation all continue in a background task, with
+/// progress surfaced via the "isGeneratingChecklist" UserDefaults flag the Home
+/// screen observes.
 @Observable
 final class CheckupViewModel {
 
@@ -29,8 +40,6 @@ final class CheckupViewModel {
     var selectedPhotoItems: [PhotosPickerItem] = [] {
         didSet { loadSelectedImages(from: selectedPhotoItems) }
     }
-
-    // MARK: - UI State
 
     var showCamera = false
     var showFilePicker = false
@@ -60,14 +69,12 @@ final class CheckupViewModel {
             var images: [UIImage] = []
             for i in 0..<min(pdfDoc.pageCount, 5) {
                 guard let page = pdfDoc.page(at: i) else { continue }
-                let thumbnail = page.thumbnail(of: CGSize(width: 900, height: 1200), for: .mediaBox)
-                images.append(thumbnail)
+                images.append(page.thumbnail(of: CGSize(width: 900, height: 1200), for: .mediaBox))
             }
             uploadedImages.append(contentsOf: images)
-        } else {
-            if let data = try? Data(contentsOf: url), let image = ImageDownsampler.downsampled(from: data) {
-                uploadedImages.append(image)
-            }
+        } else if let data = try? Data(contentsOf: url),
+                  let image = ImageDownsampler.downsampled(from: data) {
+            uploadedImages.append(image)
         }
     }
 
@@ -77,14 +84,8 @@ final class CheckupViewModel {
         showAIDisclaimer = false
 
         Task {
-            let scanner = DocumentScannerService()
-            let ocrText = try? await scanner.extractText(from: uploadedImages)
-
-            let tempEntry = JournalEntry(
-                title: "Medical Checkup",
-                content: notes,
-                entryType: .checkup
-            )
+            let ocrText = try? await DocumentScannerService().extractText(from: uploadedImages)
+            let tempEntry = JournalEntry(title: "Medical Checkup", content: notes, entryType: .checkup)
 
             do {
                 let result = try await tagService.generateTags(for: tempEntry, ocrText: ocrText)
@@ -92,7 +93,6 @@ final class CheckupViewModel {
                     withAnimation(.spring) {
                         self.aiTags = result.tags
                         self.aiAnalysis = result.analysis
-                        print("ai analysis \(result.analysis)")
                         self.isAnalyzing = false
                     }
                 }
@@ -109,7 +109,6 @@ final class CheckupViewModel {
         let capturedNotes = notes
         let capturedImages = uploadedImages
         let capturedTags = aiTags
-        let capturedAnalysis = aiAnalysis
 
         let entry = JournalEntry(
             id: entryId,
@@ -117,7 +116,7 @@ final class CheckupViewModel {
             content: capturedNotes,
             entryType: .checkup,
             aiTagsRaw: capturedTags?.joined(separator: ","),
-            aiAnalysis: capturedAnalysis,
+            aiAnalysis: aiAnalysis,
             attachedImagesData: imageData.isEmpty ? nil : imageData
         )
         context.insert(entry)
@@ -133,23 +132,20 @@ final class CheckupViewModel {
                 }
                 return
             }
-            let scanner = DocumentScannerService()
-            let ocrText = try? await scanner.extractText(from: capturedImages)
+            let ocrText = try? await DocumentScannerService().extractText(from: capturedImages)
 
-            // Generate tags if not already done
-            if capturedTags == nil {
-                if let result = try? await self.tagService.generateTags(for: entry, ocrText: ocrText) {
-                    await MainActor.run {
-                        entry.aiTags = result.tags
-                        if let analysis = result.analysis { entry.aiAnalysis = analysis }
-                        entry.updatedAt = Date()
-                    }
+            // Generate tags only if the user didn't already analyze before saving.
+            if capturedTags == nil,
+               let result = try? await self.tagService.generateTags(for: entry, ocrText: ocrText) {
+                await MainActor.run {
+                    entry.aiTags = result.tags
+                    if let analysis = result.analysis { entry.aiAnalysis = analysis }
+                    entry.updatedAt = Date()
                 }
             }
 
-            // Feed the curated health_summary.md knowledge base from whatever AI
-            // results now exist on the entry (already-analyzed or just-generated
-            // above) — no second/duplicate cloud analysis call (see HealthSummaryManager).
+            // Feed the curated health summary from whatever AI results now exist —
+            // no second cloud analysis pass.
             let (finalTags, finalAnalysis, entryDate): ([String], String?, Date) = await MainActor.run {
                 (entry.aiTags, entry.aiAnalysis, entry.createdAt)
             }
@@ -157,7 +153,7 @@ final class CheckupViewModel {
                 tags: finalTags, analysisMarkdown: finalAnalysis, date: entryDate
             )
 
-            // Always generate checklist from new checkup
+            // A new checkup always replaces the daily checklist.
             if let items = try? await self.checklistService.generateChecklist(
                 ocrText: ocrText ?? "",
                 notes: capturedNotes
@@ -166,11 +162,11 @@ final class CheckupViewModel {
                     let existing = (try? context.fetch(FetchDescriptor<ChecklistItem>())) ?? []
                     existing.forEach { context.delete($0) }
 
-                    for (idx, item) in items.enumerated() {
+                    for (index, item) in items.enumerated() {
                         context.insert(ChecklistItem(
                             text: item.text,
                             emoji: item.emoji,
-                            sortOrder: idx,
+                            sortOrder: index,
                             sourceCheckupId: entryId
                         ))
                     }

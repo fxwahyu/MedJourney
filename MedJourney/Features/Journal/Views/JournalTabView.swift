@@ -5,8 +5,6 @@ struct JournalTabView: View {
     @Query(sort: \JournalEntry.createdAt, order: .reverse) private var entries: [JournalEntry]
 
     @State private var selectedEntry: JournalEntry?
-    @State private var showCheckup = false
-    @State private var showMoodEntry = false
     @State private var filterType: JournalEntry.EntryType? = nil
 
     private var filteredEntries: [JournalEntry] {
@@ -31,13 +29,11 @@ struct JournalTabView: View {
             .ignoresSafeArea(edges: .top)
             .background(AppColors.background)
             .navigationBarHidden(true)
-            .sheet(isPresented: $showCheckup) { CheckupUploadView() }
-            .sheet(isPresented: $showMoodEntry) { JournalMoodSheet() }
             .sheet(item: $selectedEntry) { JournalEntryDetailView(entry: $0) }
         }
     }
 
-    // MARK: - Header (flat)
+    // MARK: - Header
 
     private var header: some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
@@ -57,52 +53,21 @@ struct JournalTabView: View {
                 }
                 Spacer()
             }
-
-//            HStack(spacing: AppSpacing.sm) {
-//                quickActionButton(icon: "heart.text.square", label: "Log Feeling") {
-//                    showMoodEntry = true
-//                }
-//                quickActionButton(icon: "doc.badge.plus", label: "Upload Checkup") {
-//                    showCheckup = true
-//                }
-//            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, AppSpacing.xxl)
         .padding(.bottom, AppSpacing.xl)
         .background {
-            ZStack {
-                LinearGradient(
-                    colors: [AppColors.checkupTeal.opacity(0.28), .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea(edges: .top)
-//                Rectangle()
-//                    .fill(.ultraThinMaterial)
-//                    .ignoresSafeArea(edges: .top)
-            }
+            LinearGradient(
+                colors: [AppColors.checkupTeal.opacity(0.28), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .top)
         }
         .overlay(alignment: .bottom) {
             Divider().opacity(0.25)
         }
-    }
-
-    private func quickActionButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(AppColors.brandDark)
-            .padding(.horizontal, AppSpacing.md)
-            .padding(.vertical, AppSpacing.sm)
-            .background(AppColors.brandPale)
-            .clipShape(Capsule())
-        }
-        .buttonStyle(ScaleButtonStyle())
     }
 
     // MARK: - Filter Row

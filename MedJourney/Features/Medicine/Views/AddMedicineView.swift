@@ -189,7 +189,7 @@ struct AddMedicineView: View {
         }
     }
 
-    // MARK: - Time picker (custom wheel — reads/writes viewModel directly, no @Binding)
+    // MARK: - Time Picker
 
     private var timePickerSheet: some View {
         VStack(spacing: 0) {

@@ -1,6 +1,14 @@
+//
+//  InsightsViewModel.swift
+//  MedJourney
+//
+
 import SwiftUI
 import SwiftData
 
+/// Stats and AI insights for the Insights tab. All chart statistics are computed
+/// locally in Swift; the AI layer only ever phrases pre-computed stats (on-device)
+/// or summarises the curated health summary (cloud).
 @Observable
 final class InsightsViewModel {
 
@@ -39,16 +47,6 @@ final class InsightsViewModel {
             }
         }
 
-        var shortLabel: String {
-            switch self {
-            case .week:    return "7d"
-            case .month:   return "30d"
-            case .quarter: return "90d"
-            }
-        }
-
-        /// Maps to the AI pipeline's `InsightTimeRange` so `generateDeepSummary()`
-        /// can request the matching window from the curated MD knowledge base.
         var insightTimeRange: InsightTimeRange {
             switch self {
             case .week:    return .sevenDays
@@ -58,7 +56,7 @@ final class InsightsViewModel {
         }
     }
 
-    /// Which vital type to display on the vitals trend chart.
+    /// Which vital is displayed on the vitals trend chart.
     enum VitalDisplayType: String, CaseIterable {
         case systolicBP  = "Systolic BP"
         case heartRate   = "Heart Rate"
@@ -84,66 +82,30 @@ final class InsightsViewModel {
         }
     }
 
-    /// Symptom frequency comparison before and after a medication start date.
-    struct MedicationCorrelation: Identifiable {
-        let id = UUID()
-        let medicationName: String
-        let startDate: Date
-        let tagCountBefore: Int   // 30-day window before start
-        let tagCountAfter: Int    // 30-day window after start (up to today)
-
-        var changePercent: Double? {
-            guard tagCountBefore > 0 else { return nil }
-            return Double(tagCountAfter - tagCountBefore) / Double(tagCountBefore) * 100.0
-        }
-
-        var trendLabel: String {
-            guard let pct = changePercent else { return "Insufficient data" }
-            if pct < -10 { return "Improving" }
-            if pct >  10 { return "More symptoms" }
-            return "Stable"
-        }
-
-        var trendColor: Color {
-            guard let pct = changePercent else { return AppColors.textTertiary }
-            if pct < -10 { return AppColors.brand }
-            if pct >  10 { return AppColors.error }
-            return AppColors.textSecondary
-        }
-    }
-
     // MARK: - Observable State
 
     var moodPoints: [MoodPoint] = []
     var tagCounts: [TagCount] = []
 
-    // Period filter — changing it triggers a reload of period-sensitive data
     var selectedPeriod: InsightPeriod = .month {
         didSet {
-            onDeviceInsight = nil   // stale for old period — will be re-requested below
+            onDeviceInsight = nil
             reloadPeriodData()
         }
     }
 
-    // Vitals trend chart
     var vitalsData: [VitalDisplayType: [VitalDataPoint]] = [:]
     var selectedVitalType: VitalDisplayType = .systolicBP
 
-    // Quick stats
-    var journalStreak: Int = 0
-    var checklistCompletionRate: Double? = nil
+    var journalStreak = 0
+    var checklistCompletionRate: Double?
 
-    // Medication correlation
-    var medicationCorrelations: [MedicationCorrelation] = []
-
-    // Anomalies — sourced from VitalsAnomalyDetector (on-device)
     var anomalies: [VitalsAnomaly] = []
 
-    // On-device insight (Foundation Models phrases the local stats)
-    var onDeviceInsight: String? = nil
-    var isLoadingInsight: Bool = false
+    var onDeviceInsight: String?
+    var isLoadingInsight = false
 
-    // AI summary state — persisted in UserDefaults so it survives navigation
+    // Deep AI summary — persisted in UserDefaults so it survives navigation.
     var healthSummary: String? {
         didSet { saveSummaryToDefaults() }
     }
@@ -156,90 +118,57 @@ final class InsightsViewModel {
     // MARK: - Private
 
     private var cachedEntries: [JournalEntry] = []
-    private var cachedMedicines: [Medicine] = []
     private var cachedChecklistItems: [ChecklistItem] = []
 
     private static let summaryTextKey = "insights.healthSummary"
     private static let summaryDateKey = "insights.healthSummaryDate"
 
     init() {
-        // Restore persisted summary from a previous session
         healthSummary = UserDefaults.standard.string(forKey: Self.summaryTextKey)
         summaryGeneratedDate = UserDefaults.standard.object(forKey: Self.summaryDateKey) as? Date
     }
 
-    private func saveSummaryToDefaults() {
-        if let summary = healthSummary {
-            UserDefaults.standard.set(summary, forKey: Self.summaryTextKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.summaryTextKey)
-        }
-        if let date = summaryGeneratedDate {
-            UserDefaults.standard.set(date, forKey: Self.summaryDateKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.summaryDateKey)
-        }
-    }
-
     // MARK: - Load
 
-    /// Primary entry point — call from the view on first appear.
-    /// Loads all data including requesting the AI phrase insight (once per period).
-    func loadData(
-        from entries: [JournalEntry],
-        checklistItems: [ChecklistItem] = [],
-        medicines: [Medicine] = []
-    ) {
-        cachedEntries        = entries
-        cachedMedicines      = medicines
+    /// Full load on first appear — includes requesting the on-device AI insight.
+    func loadData(from entries: [JournalEntry], checklistItems: [ChecklistItem] = []) {
+        cachedEntries = entries
         cachedChecklistItems = checklistItems
 
         loadMoodTrend(from: entries)
-        reloadPeriodData()      // includes triggerOnDeviceInsight()
-        journalStreak            = computeStreak(from: entries)
-        checklistCompletionRate  = computeCompletionRate()
-        loadMedicationCorrelations()
+        reloadPeriodData()
+        journalStreak = computeStreak(from: entries)
+        checklistCompletionRate = computeCompletionRate()
         anomalies = VitalsAnomalyDetector.detect(from: Array(entries.prefix(100)))
     }
 
-    /// Lightweight refresh for when SwiftData entries change mid-session
-    /// (new journal entry saved, checklist toggled, etc.).
-    /// Reloads charts and stats only — does NOT re-trigger the AI phrase,
-    /// which is already good for the current period and session.
-    func refreshData(
-        from entries: [JournalEntry],
-        checklistItems: [ChecklistItem] = [],
-        medicines: [Medicine] = []
-    ) {
-        cachedEntries        = entries
-        cachedMedicines      = medicines
+    /// Lightweight refresh when data changes mid-session — charts and stats only,
+    /// no new AI call (the existing insight stays valid for the period).
+    func refreshData(from entries: [JournalEntry], checklistItems: [ChecklistItem] = []) {
+        cachedEntries = entries
         cachedChecklistItems = checklistItems
 
         loadMoodTrend(from: entries)
         loadTagFrequency(from: entries)
         loadVitalsData(from: entries)
-        journalStreak            = computeStreak(from: entries)
-        checklistCompletionRate  = computeCompletionRate()
-        loadMedicationCorrelations()
+        journalStreak = computeStreak(from: entries)
+        checklistCompletionRate = computeCompletionRate()
         anomalies = VitalsAnomalyDetector.detect(from: Array(entries.prefix(100)))
-        // Note: intentionally skips triggerOnDeviceInsight() — no extra AI call needed.
     }
 
-    /// Reloads everything that depends on `selectedPeriod`.
     private func reloadPeriodData() {
         loadTagFrequency(from: cachedEntries)
         loadVitalsData(from: cachedEntries)
         triggerOnDeviceInsight()
     }
 
-    // MARK: - Mood Trend (last 30 days, fixed)
+    // MARK: - Mood Trend (last 30 days)
 
     private func loadMoodTrend(from entries: [JournalEntry]) {
-        let journalEntries = entries.filter { $0.entryType == .journal }
         let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
 
-        moodPoints = journalEntries
-            .filter { $0.createdAt >= cutoff }
+        moodPoints = entries
+            .filter { $0.entryType == .journal && $0.createdAt >= cutoff }
             .compactMap { entry in
                 let mood = JournalMood.allCases.first { $0.rawValue == entry.title }
                     ?? JournalMood.allCases.first { entry.title.contains($0.rawValue) }
@@ -251,8 +180,8 @@ final class InsightsViewModel {
 
     // MARK: - Tag Frequency (period-filtered)
 
-    /// Meta/status words that are NOT symptoms — excluded from the Symptom Frequency
-    /// chart so only real, patient-facing symptoms are shown.
+    /// Meta/status words excluded from the Symptom Frequency chart so only real,
+    /// patient-facing symptoms are shown.
     private static let nonSymptomTags: Set<String> = [
         "monitoring", "routine monitoring", "routine", "concern", "exercise",
         "improving", "improved mood", "improved energy", "positive", "positive outlook",
@@ -269,12 +198,11 @@ final class InsightsViewModel {
         "glucose risk", "infection monitoring", "cold recovering", "metformin started",
         "amlodipine started", "glipizide started", "metformin reaction", "glipizide side effect",
         "glipizide risk", "possible hypoglycemia", "hypoglycemia risk", "medication adjustment",
-        "diabetes type2 diagnosed", "hypertension stage1", "treatment responding", "busy schedule",
+        "diabetes type2 diagnosed", "hypertension stage1", "busy schedule",
         "diet disruption", "afternoon crash", "sedentary behavior", "mental health"
     ]
 
-    /// Converts a stored tag into a human-readable label: hyphens → spaces, trimmed,
-    /// lowercased (e.g. "work-stress" → "work stress").
+    /// "work-stress" → "work stress": hyphens/underscores to spaces, trimmed, lowercased.
     private static func humanize(_ tag: String) -> String {
         tag.replacingOccurrences(of: "-", with: " ")
            .replacingOccurrences(of: "_", with: " ")
@@ -284,23 +212,24 @@ final class InsightsViewModel {
 
     private func loadTagFrequency(from entries: [JournalEntry]) {
         let cutoff = Calendar.current.date(byAdding: .day, value: -selectedPeriod.rawValue, to: Date()) ?? Date()
-        var freq: [String: Int] = [:]
-        // Only journal entries carry day-to-day symptoms. Checkup / medication entries
-        // hold lab findings and admin tags that are not symptoms, so they're excluded.
+        var frequency: [String: Int] = [:]
+
+        // Only journal entries carry day-to-day symptoms; checkup/medication entries
+        // hold lab findings and admin tags.
         for entry in entries where entry.entryType == .journal && entry.createdAt >= cutoff {
             for tag in entry.aiTags {
                 let label = Self.humanize(tag)
                 guard !label.isEmpty, !Self.nonSymptomTags.contains(label) else { continue }
-                freq[label, default: 0] += 1
+                frequency[label, default: 0] += 1
             }
         }
-        tagCounts = freq
+        tagCounts = frequency
             .sorted { $0.value > $1.value }
             .prefix(10)
             .map { TagCount(tag: $0.key, count: $0.value) }
     }
 
-    // MARK: - Vitals Trend Chart (period-filtered)
+    // MARK: - Vitals Trend (period-filtered)
 
     private func loadVitalsData(from entries: [JournalEntry]) {
         let cutoff = Calendar.current.date(byAdding: .day, value: -selectedPeriod.rawValue, to: Date()) ?? Date()
@@ -310,32 +239,20 @@ final class InsightsViewModel {
 
         var data: [VitalDisplayType: [VitalDataPoint]] = [:]
 
-        let systolicPoints = relevant.compactMap { e -> VitalDataPoint? in
-            guard let bp = e.bloodPressure, let sys = parseSystolic(from: bp) else { return nil }
-            return VitalDataPoint(date: e.createdAt, value: sys)
+        let series: [(VitalDisplayType, (JournalEntry) -> Double?)] = [
+            (.systolicBP,  { $0.bloodPressure.flatMap(Self.parseSystolic) }),
+            (.heartRate,   { $0.heartRate.map(Double.init) }),
+            (.temperature, { $0.temperature }),
+            (.weight,      { $0.weight }),
+        ]
+        for (type, value) in series {
+            let points = relevant.compactMap { entry in
+                value(entry).map { VitalDataPoint(date: entry.createdAt, value: $0) }
+            }
+            if !points.isEmpty { data[type] = points }
         }
-        if !systolicPoints.isEmpty { data[.systolicBP] = systolicPoints }
-
-        let hrPoints = relevant.compactMap { e -> VitalDataPoint? in
-            guard let hr = e.heartRate else { return nil }
-            return VitalDataPoint(date: e.createdAt, value: Double(hr))
-        }
-        if !hrPoints.isEmpty { data[.heartRate] = hrPoints }
-
-        let tempPoints = relevant.compactMap { e -> VitalDataPoint? in
-            guard let t = e.temperature else { return nil }
-            return VitalDataPoint(date: e.createdAt, value: t)
-        }
-        if !tempPoints.isEmpty { data[.temperature] = tempPoints }
-
-        let weightPoints = relevant.compactMap { e -> VitalDataPoint? in
-            guard let w = e.weight else { return nil }
-            return VitalDataPoint(date: e.createdAt, value: w)
-        }
-        if !weightPoints.isEmpty { data[.weight] = weightPoints }
 
         vitalsData = data
-        // Auto-select the first vital type that actually has data
         if data[selectedVitalType] == nil,
            let first = VitalDisplayType.allCases.first(where: { data[$0] != nil }) {
             selectedVitalType = first
@@ -349,169 +266,117 @@ final class InsightsViewModel {
         let journalDays = Set(
             entries
                 .filter { $0.entryType == .journal }
-                .map    { calendar.startOfDay(for: $0.createdAt) }
+                .map { calendar.startOfDay(for: $0.createdAt) }
         )
         guard !journalDays.isEmpty else { return 0 }
 
-        var streak   = 0
+        var streak = 0
         var checkDay = calendar.startOfDay(for: Date())
 
-        // Allow the streak to start from today or yesterday
+        // The streak may start from today or yesterday.
         if !journalDays.contains(checkDay),
            let yesterday = calendar.date(byAdding: .day, value: -1, to: checkDay) {
             checkDay = yesterday
         }
-
         while journalDays.contains(checkDay) {
             streak += 1
-            guard let prev = calendar.date(byAdding: .day, value: -1, to: checkDay) else { break }
-            checkDay = prev
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: checkDay) else { break }
+            checkDay = previous
         }
         return streak
     }
 
     // MARK: - Checklist Completion Rate
 
+    /// Blends today's live completion with the historical average for the period.
     private func computeCompletionRate() -> Double? {
         let historical = ChecklistHistoryStore.shared.averageRate(forPastDays: selectedPeriod.rawValue)
 
-        let todayTotal     = cachedChecklistItems.count
-        let todayCompleted = cachedChecklistItems.filter(\.isChecked).count
-
+        let todayTotal = cachedChecklistItems.count
         guard todayTotal > 0 else { return historical }
-        let todayRate = Double(todayCompleted) / Double(todayTotal)
+        let todayRate = Double(cachedChecklistItems.filter(\.isChecked).count) / Double(todayTotal)
 
-        // Blend today's live state with historical average
-        if let hist = historical { return (hist + todayRate) / 2.0 }
+        if let historical { return (historical + todayRate) / 2.0 }
         return todayRate
     }
 
-    // MARK: - Medication Correlation
-
-    private func loadMedicationCorrelations() {
-        let lookback = 30
-        var correlations: [MedicationCorrelation] = []
-
-        for medicine in cachedMedicines {
-            guard
-                let beforeStart = Calendar.current.date(byAdding: .day, value: -lookback, to: medicine.startDate),
-                let afterEnd    = Calendar.current.date(byAdding: .day, value:  lookback, to: medicine.startDate)
-            else { continue }
-
-            let before = cachedEntries.filter { $0.createdAt >= beforeStart && $0.createdAt < medicine.startDate }
-            let after  = cachedEntries.filter { $0.createdAt >= medicine.startDate && $0.createdAt <= min(afterEnd, Date()) }
-
-            guard before.count >= 3 else { continue }    // not enough data before
-
-            correlations.append(MedicationCorrelation(
-                medicationName: medicine.name,
-                startDate: medicine.startDate,
-                tagCountBefore: before.reduce(0) { $0 + $1.aiTags.count },
-                tagCountAfter:  after.reduce(0)  { $0 + $1.aiTags.count }
-            ))
-        }
-        medicationCorrelations = correlations
-    }
-
-    // MARK: - On-Device Insight (Foundation Models)
+    // MARK: - On-Device Insight
 
     private func triggerOnDeviceInsight() {
-        // Skip if already loading, no data, or we already have an insight for this period.
         // `onDeviceInsight` is cleared in `selectedPeriod.didSet`, so a period change
-        // always triggers a fresh request; re-entering the tab or onChange events do not.
+        // always requests a fresh insight while re-entering the tab does not.
         guard !isLoadingInsight, !tagCounts.isEmpty, onDeviceInsight == nil else { return }
-        // Set the flag SYNCHRONOUSLY before the Task to close the race window where
-        // multiple onChange callbacks could each pass the guard on the same run loop tick.
+
+        // Set synchronously before the Task so concurrent onChange callbacks on the
+        // same run loop tick can't all pass the guard.
         isLoadingInsight = true
         let tagDict = Dictionary(uniqueKeysWithValues: tagCounts.map { ($0.tag, $0.count) })
-        let periodLabel = self.selectedPeriod.label
+        let periodLabel = selectedPeriod.label
+
         Task { @MainActor in
-            // On-device Foundation Models only — no cloud fallback.
-            // On simulator / devices without Apple Intelligence this stays nil
-            // and the insight sentence simply isn't shown (saves an API call).
+            // On-device only — without Apple Intelligence the insight sentence
+            // simply isn't shown (saves an API call).
             let insight: String? = FoundationModelsService.shared.isAvailable
                 ? await FoundationModelsService.shared.phraseTagInsight(
                     tagCounts: tagDict,
                     periodLabel: periodLabel
                   )
                 : nil
-
             self.onDeviceInsight = insight
             self.isLoadingInsight = false
         }
     }
 
-    // MARK: - Deep AI Summary (Curated MD Knowledge Base)
+    // MARK: - Deep AI Summary
 
-    /// Generates a deep health-trend summary from the curated `health_summary.md`
-    /// knowledge base — NOT from freshly-recomputed local stats and NOT from raw
-    /// journal entries. `HealthSummaryManager` has been progressively building that
-    /// file from every journal save and checkup upload (see `JournalEntryViewModel`
-    /// / `CheckupViewModel`); this is the one place that curated knowledge gets
-    /// turned into a narrative. Keeps the same ~90%-fewer-tokens guarantee the old
-    /// compact-stats approach had, with the bonus that the cloud sees real history
-    /// (lab trends, flagged abnormals, doctor notes) instead of just numbers.
+    /// Generates the deep health-trend narrative from the curated `health_summary.md`
+    /// knowledge base — never from raw journal entries.
     func generateDeepSummary() {
         guard !isGeneratingSummary else { return }
         isGeneratingSummary = true
         summaryError = nil
-        // Keep old summary visible while refreshing (don't clear until new one arrives)
 
         let timeRange = selectedPeriod.insightTimeRange
-        print("🧠 [InsightsViewModel] generateDeepSummary starting — period=\(selectedPeriod.label)")
 
         Task {
             do {
                 let curatedSummary = await HealthSummaryManager.shared.getCurrentSummary()
-                print("🧠 [InsightsViewModel] health_summary.md size=\(curatedSummary.count) chars")
-
                 let insights = try await LLMAnalysisService.shared.generateHealthInsights(
                     summary: curatedSummary, timeRange: timeRange
                 )
-                print("🧠 [InsightsViewModel] ✅ Insights generated successfully")
                 await MainActor.run {
                     withAnimation(.spring) {
-                        self.healthSummary         = Self.renderMarkdown(from: insights)
-                        self.summaryGeneratedDate  = insights.generatedAt
-                        self.isGeneratingSummary   = false
+                        self.healthSummary = Self.renderMarkdown(from: insights)
+                        self.summaryGeneratedDate = insights.generatedAt
+                        self.isGeneratingSummary = false
                     }
                 }
-            } catch LLMAnalysisError.missingAPIKey {
-                print("🧠 [InsightsViewModel] ❌ FAIL — missingAPIKey: GEMINI_API_KEY is empty. Check Config.plist.")
-                await MainActor.run {
-                    self.summaryError       = "API key not configured. Add GEMINI_API_KEY to Config.plist."
-                    self.isGeneratingSummary = false
-                }
-            } catch LLMAnalysisError.apiError(let code) {
-                print("🧠 [InsightsViewModel] ❌ FAIL — apiError HTTP \(code)")
-                let msg: String
-                if code == 429 {
-                    msg = "Gemini rate limit reached — too many requests in a short window. Wait a minute and try again, or check your quota at ai.google.dev/rate-limit."
-                } else {
-                    msg = "Network error (HTTP \(code)). Check your connection and try again."
-                }
-                await MainActor.run {
-                    self.summaryError        = msg
-                    self.isGeneratingSummary = false
-                }
-            } catch LLMAnalysisError.parseError {
-                print("🧠 [InsightsViewModel] ❌ FAIL — parseError: Gemini returned unexpected response format")
-                await MainActor.run {
-                    self.summaryError       = "Failed to read AI response. Please try again."
-                    self.isGeneratingSummary = false
-                }
             } catch {
-                print("🧠 [InsightsViewModel] ❌ FAIL — unexpected error: \(error)")
                 await MainActor.run {
-                    self.summaryError       = "Failed to generate summary: \(error.localizedDescription)"
+                    self.summaryError = Self.errorMessage(for: error)
                     self.isGeneratingSummary = false
                 }
             }
         }
     }
 
-    /// Renders a `HealthInsights` result as the lightweight Markdown that
-    /// `MarkdownAnalysisView` already knows how to display (`### heading` + `• bullet`).
+    private static func errorMessage(for error: Error) -> String {
+        switch error {
+        case LLMError.missingAPIKey:
+            return "API key not configured. Add GEMINI_API_KEY to Config.plist."
+        case LLMError.apiError(429):
+            return "Rate limit reached — too many requests in a short window. Wait a minute and try again."
+        case LLMError.apiError(let code):
+            return "Network error (HTTP \(code)). Check your connection and try again."
+        case LLMError.parseError:
+            return "Failed to read AI response. Please try again."
+        default:
+            return "Failed to generate summary: \(error.localizedDescription)"
+        }
+    }
+
+    /// Renders a `HealthInsights` result as the lightweight markdown
+    /// `MarkdownAnalysisView` displays (`### heading` + `• bullet`).
     private static func renderMarkdown(from insights: HealthInsights) -> String {
         var parts: [String] = []
 
@@ -541,11 +406,24 @@ final class InsightsViewModel {
         return parts.joined(separator: "\n")
     }
 
-    // MARK: - Private Helpers
+    // MARK: - Helpers
 
-    private func parseSystolic(from raw: String) -> Double? {
+    private static func parseSystolic(from raw: String) -> Double? {
         let parts = raw.split(separator: "/")
-        guard parts.count == 2, let sys = Int(parts[0].trimmingCharacters(in: .whitespaces)) else { return nil }
-        return Double(sys)
+        guard parts.count == 2, let systolic = Int(parts[0].trimmingCharacters(in: .whitespaces)) else { return nil }
+        return Double(systolic)
+    }
+
+    private func saveSummaryToDefaults() {
+        if let summary = healthSummary {
+            UserDefaults.standard.set(summary, forKey: Self.summaryTextKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.summaryTextKey)
+        }
+        if let date = summaryGeneratedDate {
+            UserDefaults.standard.set(date, forKey: Self.summaryDateKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.summaryDateKey)
+        }
     }
 }
